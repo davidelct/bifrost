@@ -2037,6 +2037,14 @@ func GenerateComplexityAnalyzerConfigHashes(config *ComplexityAnalyzerConfig) (C
 		hashes.SessionSettings = settingsHash
 	}
 
+	if normalized.Suggestions != nil {
+		settingsHash, err := hashComplexityValue(normalized.Suggestions)
+		if err != nil {
+			return ComplexityAnalyzerConfigHashes{}, fmt.Errorf("failed to hash suggestions settings: %w", err)
+		}
+		hashes.SuggestionsSettings = settingsHash
+	}
+
 	return hashes, nil
 }
 
