@@ -3494,9 +3494,9 @@ func TestBudgetRemovalRequestDetection(t *testing.T) {
 }
 
 // A deprecated single-budget update merges into the budget already stored, so every field it does not
-// name has to survive - the window settings included. Before, coerceLegacyBudget dropped them, which
+// name has to survive - the window settings included. Before, BudgetsFromSingleBudgetUpdate dropped them, which
 // moved a quarterly budget's fiscal start back to the default on any unrelated edit.
-func TestCoerceLegacyBudgetKeepsResetConfig(t *testing.T) {
+func TestBudgetsFromSingleBudgetUpdateKeepsResetConfig(t *testing.T) {
 	existing := &configstoreTables.TableBudget{
 		ID:            "budget-1",
 		MaxLimit:      100,
@@ -3505,7 +3505,7 @@ func TestCoerceLegacyBudgetKeepsResetConfig(t *testing.T) {
 	}
 
 	t.Run("an edit that does not name it keeps the stored value", func(t *testing.T) {
-		got := coerceLegacyBudget(&UpdateBudgetRequest{MaxLimit: schemas.Ptr(250.0)}, existing)
+		got := BudgetsFromSingleBudgetUpdate(&UpdateBudgetRequest{MaxLimit: schemas.Ptr(250.0)}, existing)
 		if got == nil || len(*got) != 1 {
 			t.Fatalf("expected one budget, got %v", got)
 		}
@@ -3519,7 +3519,7 @@ func TestCoerceLegacyBudgetKeepsResetConfig(t *testing.T) {
 	})
 
 	t.Run("an edit that names it applies the requested value", func(t *testing.T) {
-		got := coerceLegacyBudget(&UpdateBudgetRequest{ResetConfig: &configstoreTables.BudgetResetConfig{QuarterStartMonth: 4}}, existing)
+		got := BudgetsFromSingleBudgetUpdate(&UpdateBudgetRequest{ResetConfig: &configstoreTables.BudgetResetConfig{QuarterStartMonth: 4}}, existing)
 		if got == nil || len(*got) != 1 {
 			t.Fatalf("expected one budget, got %v", got)
 		}
@@ -3641,7 +3641,7 @@ func TestCollectProviderConfigDeleteIDs(t *testing.T) {
 	}
 }
 
-func TestCoerceLegacyBudget(t *testing.T) {
+func TestBudgetsFromSingleBudgetUpdate(t *testing.T) {
 	existing := &configstoreTables.TableBudget{ID: "bud-1", MaxLimit: 50, ResetDuration: "1d"}
 
 	tests := []struct {
@@ -3700,7 +3700,7 @@ func TestCoerceLegacyBudget(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := coerceLegacyBudget(tt.req, tt.existing)
+			got := BudgetsFromSingleBudgetUpdate(tt.req, tt.existing)
 			if tt.wantNil {
 				if got != nil {
 					t.Fatalf("expected nil, got %+v", got)
@@ -3945,8 +3945,10 @@ func newMockCustomerStore() *mockCustomerStore {
 	return &mockCustomerStore{customers: make(map[string]*configstoreTables.TableCustomer)}
 }
 
+// ExecuteTransaction runs fn with a placeholder transaction. The mock's methods ignore it, but a real
+// store never hands fn a nil one, and code that requires a transaction refuses nil.
 func (m *mockCustomerStore) ExecuteTransaction(_ context.Context, fn func(*gorm.DB) error) error {
-	return fn(nil)
+	return fn(&gorm.DB{})
 }
 func (m *mockCustomerStore) GetCustomer(_ context.Context, id string, _ ...*gorm.DB) (*configstoreTables.TableCustomer, error) {
 	c, ok := m.customers[id]
