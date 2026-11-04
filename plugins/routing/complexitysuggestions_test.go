@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/maximhq/bifrost/framework/logstore"
 	"github.com/maximhq/bifrost/plugins/routing/complexity"
+	"github.com/maximhq/bifrost/plugins/routing/complexity/suggestrun"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -281,6 +283,27 @@ func TestComplexitySuggestionsScheduleWithoutAConfigStore(t *testing.T) {
 	assert.Len(t, runsOf(t, store), 1)
 }
 
+// The next run served to clients is the schedule state's once a node has set
+// it for the current settings (catch-ups and changes move it), the settings'
+// own before that, and now when a run is already due.
+func TestNextComplexitySuggestionRun(t *testing.T) {
+	start := time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
+	schedule := *hourlyFrom(start)
+	now := start.Add(90 * time.Minute)
+	ctx := context.Background()
+	assert.True(t, NextComplexitySuggestionRun(ctx, nil, schedule, now).Equal(start.Add(2*time.Hour)), "no state: from the settings")
+
+	schedules := suggestionScheduleStore(t)
+	stored := start.Add(3 * time.Hour)
+	require.NoError(t, schedules.SetComplexitySuggestionSchedule(ctx, complexitySuggestionScheduleKey, complexitySuggestionScheduleHash(schedule), stored))
+	assert.True(t, NextComplexitySuggestionRun(ctx, schedules, schedule, now).Equal(stored), "the stored next run")
+
+	daily := configstore.ComplexitySuggestionsSchedule{Every: "1d", StartAt: &start}
+	assert.True(t, NextComplexitySuggestionRun(ctx, schedules, daily, now).Equal(start.Add(24*time.Hour)), "state for other settings is ignored")
+
+	assert.True(t, NextComplexitySuggestionRun(ctx, schedules, schedule, stored.Add(time.Minute)).Equal(stored.Add(time.Minute)), "a due run is due now")
+}
+
 type recordingQueue struct {
 	mu    sync.Mutex
 	ids   []string
@@ -393,4 +416,107 @@ func TestComplexitySuggestionsJobWhenTurnedOff(t *testing.T) {
 	require.NoError(t, p.scheduleComplexitySuggestions(context.Background(), time.Now()))
 	p.suggestions.wg.Wait()
 	assert.Len(t, runsOf(t, store), 1)
+}
+
+// A run started by hand runs outside the schedule under a fresh UUID, is
+// recorded as manual, and is refused while another is in flight or when suggestions are off.
+func TestComplexitySuggestionsRunNow(t *testing.T) {
+	p, store, _ := suggestionPlugin(t)
+	ctx := context.Background()
+	runID, err := p.StartComplexitySuggestionRunNow(ctx)
+	require.NoError(t, err)
+	_, err = uuid.Parse(runID)
+	require.NoError(t, err, "a manual run ID is the run row's varchar(36) key, so a bare UUID; got %q", runID)
+	assert.Len(t, runID, 36)
+	run := waitForRun(t, store)
+	assert.Equal(t, runID, run.ID)
+	assert.Equal(t, logstore.ComplexitySuggestionTriggerManual, run.TriggeredBy)
+
+	queue := &recordingQueue{}
+	p.SetComplexitySuggestionJobs(queue, &inFlightJobs{job: &tables.TableSidekiqJob{ID: "busy"}})
+	_, err = p.StartComplexitySuggestionRunNow(ctx)
+	require.ErrorIs(t, err, ErrComplexitySuggestionRunInFlight)
+	assert.Empty(t, queue.ids)
+
+	require.NoError(t, p.storeComplexityAnalyzerConfig(captureTestConfig(nil)))
+	_, err = p.StartComplexitySuggestionRunNow(ctx)
+	require.ErrorIs(t, err, ErrComplexitySuggestionsOff)
+}
+
+// A manual run asked for while no phrase bank serves is refused up front,
+// rather than accepted and then recorded as a failed run.
+func TestComplexitySuggestionsRunNowNeedsAServingBank(t *testing.T) {
+	ctx := context.Background()
+	logger := bifrost.NewDefaultLogger(schemas.LogLevelError)
+	p := &RoutingPlugin{logger: logger, semanticClassifier: complexity.NewSemanticClassifier(ctx, logger)}
+	p.semanticClassifier.SetEmbeddingFunc(func(context.Context, *complexity.SemanticConfig, string) ([]float32, error) {
+		return nil, errors.New("embedding provider down")
+	})
+	p.startComplexityCapture(ctx, time.Hour, time.Hour)
+	p.startComplexitySuggestions(ctx, 0)
+	t.Cleanup(func() { _ = p.Cleanup() })
+	store := suggestionTestStore(t)
+	p.SetComplexitySuggestionStore(store, func(context.Context, []string, int) (map[string]string, error) { return nil, nil })
+	require.NoError(t, p.storeComplexityAnalyzerConfig(captureTestConfig(suggestionTestSettings())))
+	require.Eventually(t, func() bool { return p.semanticClassifier.Status().State == complexity.SemanticStatusFailed },
+		2*time.Second, 5*time.Millisecond)
+
+	_, err := p.StartComplexitySuggestionRunNow(ctx)
+	require.ErrorIs(t, err, complexity.ErrNoServingGeneration)
+	p.suggestions.wg.Wait()
+	runs, err := store.ListComplexitySuggestionRuns(ctx, nil, 10)
+	require.NoError(t, err)
+	assert.Empty(t, runs)
+}
+
+// A scheduled run that comes due while a manual one is queued or running is
+// recorded as skipped, not queued behind it, and the schedule moves on; a
+// manual run never moves the schedule.
+func TestComplexitySuggestionsScheduledRunDuringAManualOne(t *testing.T) {
+	start := time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
+	schedules := suggestionScheduleStore(t)
+	p, store := scheduledSuggestionPlugin(t, start, schedules)
+	ctx := context.Background()
+	require.NoError(t, p.scheduleComplexitySuggestions(ctx, start.Add(10*time.Minute)))
+
+	queue := &recordingQueue{}
+	manual := &inFlightJobs{}
+	p.SetComplexitySuggestionJobs(queue, manual)
+	runID, err := p.StartComplexitySuggestionRunNow(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{runID}, queue.ids)
+	row, err := schedules.GetComplexitySuggestionSchedule(ctx, complexitySuggestionScheduleKey)
+	require.NoError(t, err)
+	assert.True(t, row.NextRunAt.Equal(start.Add(time.Hour)), "a manual run leaves the schedule alone")
+
+	manual.job = &tables.TableSidekiqJob{ID: runID} // still running
+	due := start.Add(time.Hour)
+	require.NoError(t, p.scheduleComplexitySuggestions(ctx, due.Add(time.Second)))
+	assert.Equal(t, []string{runID}, queue.ids, "nothing queued behind the manual run")
+	var scheduled *logstore.ComplexitySuggestionRun
+	for _, run := range runsOf(t, store) {
+		if run.ID == complexitySuggestionSlotRunID(due) {
+			scheduled = &run
+		}
+	}
+	require.NotNil(t, scheduled)
+	assert.Equal(t, logstore.ComplexitySuggestionRunSkipped, scheduled.Status)
+	assert.Contains(t, scheduled.Error, "still in progress")
+	row, err = schedules.GetComplexitySuggestionSchedule(ctx, complexitySuggestionScheduleKey)
+	require.NoError(t, err)
+	assert.True(t, row.NextRunAt.Equal(due.Add(time.Hour)), "the schedule moved on")
+}
+
+// Testing a phrase uses the serving bank and the router's own floor.
+func TestComplexitySuggestionsTestPhrases(t *testing.T) {
+	p, _, _ := suggestionPlugin(t)
+	got, err := p.TestComplexitySuggestionPhrases(context.Background(),
+		[]complexity.SuggestionPhrase{{Tier: "COMPLEX", Text: "simple request"}},
+		[]suggestrun.TestExample{{LogID: "log-0", Text: "simple request"}})
+	require.NoError(t, err)
+	require.Len(t, got.Examples, 1)
+	assert.Equal(t, "SIMPLE", got.Examples[0].Current.Tier)
+	assert.Equal(t, "simple exemplar", got.Phrases[0].Nearest.Phrase, "the tested phrase duplicates a live one")
+	assert.InDelta(t, 1, got.Phrases[0].Nearest.Similarity, 1e-6)
+	assert.Equal(t, 1, p.ComplexitySuggestionMessageHistoryCount())
 }

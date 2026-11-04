@@ -2557,66 +2557,94 @@ func TestSchemaComplexityAnalyzerDependencies(t *testing.T) {
 			analyzer: complexityAnalyzerSchemaConfig(`,"session":{"enabled":true}`, `,"semantic":{"provider":"openai","embedding_model":"text-embedding-3-small"}`),
 		},
 		{
+			name:     "enabled suggestions accept their own model without an llm block",
+			analyzer: complexityAnalyzerSchemaConfig(semanticSchemaBlock, `,"suggestions":{"enabled":true,"provider":"openai","model":"gpt-5"}`),
+		},
+		{
+			name:      "enabled suggestions require a model",
+			analyzer:  complexityAnalyzerSchemaConfig(semanticSchemaBlock, `,"suggestions":{"enabled":true}`),
+			wantError: true,
+		},
+		{
+			name:      "enabled suggestions are not satisfied by a model without its provider",
+			analyzer:  complexityAnalyzerSchemaConfig(semanticSchemaBlock, `,"suggestions":{"enabled":true,"model":"gpt-5"}`),
+			wantError: true,
+		},
+		{
+			name:      "enabled suggestions require a semantic block",
+			analyzer:  complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"provider":"openai","model":"gpt-5"}`),
+			wantError: true,
+		},
+		{
+			name:      "enabled suggestions reject a decision primary classifier",
+			analyzer:  complexityAnalyzerSchemaConfig(semanticSchemaBlock, `,"classifier":"decision","suggestions":{"enabled":true,"provider":"openai","model":"gpt-5"}`),
+			wantError: true,
+		},
+		{
+			name:     "disabled suggestions need neither semantic nor a model",
+			analyzer: complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":false}`),
+		},
+		{
 			name:     "suggestions accept sample rate and lookback",
-			analyzer: complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"sample_rate":0.25,"lookback_days":14}`),
+			analyzer: complexityAnalyzerSchemaConfig(suggestionsSchemaPrereqs, `,"suggestions":{"enabled":true,"sample_rate":0.25,"lookback_days":14}`),
 		},
 		{
 			name:      "suggestions require enabled",
-			analyzer:  complexityAnalyzerSchemaConfig(`,"suggestions":{"sample_rate":0.25}`),
+			analyzer:  complexityAnalyzerSchemaConfig(suggestionsSchemaPrereqs, `,"suggestions":{"sample_rate":0.25}`),
 			wantError: true,
 		},
 		{
 			name:      "suggestions reject a zero sample rate",
-			analyzer:  complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"sample_rate":0}`),
+			analyzer:  complexityAnalyzerSchemaConfig(suggestionsSchemaPrereqs, `,"suggestions":{"enabled":true,"sample_rate":0}`),
 			wantError: true,
 		},
 		{
 			name:      "suggestions reject a lookback past 90 days",
-			analyzer:  complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"lookback_days":91}`),
+			analyzer:  complexityAnalyzerSchemaConfig(suggestionsSchemaPrereqs, `,"suggestions":{"enabled":true,"lookback_days":91}`),
 			wantError: true,
 		},
 		{
 			name:      "suggestions reject unknown fields",
-			analyzer:  complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"samplerate":0.5}`),
+			analyzer:  complexityAnalyzerSchemaConfig(suggestionsSchemaPrereqs, `,"suggestions":{"enabled":true,"samplerate":0.5}`),
 			wantError: true,
 		},
 		{
 			name: "suggestions accept run settings",
-			analyzer: complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"schedule":{"every":"1w","start_at":"2026-11-06T04:30:00Z"},` +
+			analyzer: complexityAnalyzerSchemaConfig(suggestionsSchemaPrereqs, `,"suggestions":{"enabled":true,"schedule":{"every":"1w","start_at":"2026-11-06T04:30:00Z"},`+
 				`"max_clustered_requests":5000,"min_cluster_requests":10,"provider":"openai","model":"gpt-5","instructions":"be brief"}`),
 		},
 		{
 			name:     "suggestions accept an hourly schedule",
-			analyzer: complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"schedule":{"every":"6h"}}`),
+			analyzer: complexityAnalyzerSchemaConfig(suggestionsSchemaPrereqs, `,"suggestions":{"enabled":true,"schedule":{"every":"6h"}}`),
 		},
 		{
 			name:      "suggestions reject hours of a day or more",
-			analyzer:  complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"schedule":{"every":"24h"}}`),
+			analyzer:  complexityAnalyzerSchemaConfig(suggestionsSchemaPrereqs, `,"suggestions":{"enabled":true,"schedule":{"every":"24h"}}`),
 			wantError: true,
 		},
 		{
 			name:      "suggestions reject a malformed first run",
-			analyzer:  complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"schedule":{"every":"1d","start_at":"tomorrow at 3"}}`),
+			analyzer:  complexityAnalyzerSchemaConfig(suggestionsSchemaPrereqs, `,"suggestions":{"enabled":true,"schedule":{"every":"1d","start_at":"tomorrow at 3"}}`),
 			wantError: true,
 		},
 		{
 			name:      "suggestions reject the old wall-clock fields",
-			analyzer:  complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"schedule":{"every":"1d","at":"03:00","timezone":"UTC"}}`),
+			analyzer:  complexityAnalyzerSchemaConfig(suggestionsSchemaPrereqs, `,"suggestions":{"enabled":true,"schedule":{"every":"1d","at":"03:00","timezone":"UTC"}}`),
 			wantError: true,
 		},
 		{
 			name:      "suggestions reject unknown schedule fields",
-			analyzer:  complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"schedule":{"cron":"0 3 * * *"}}`),
+			analyzer:  complexityAnalyzerSchemaConfig(suggestionsSchemaPrereqs, `,"suggestions":{"enabled":true,"schedule":{"cron":"0 3 * * *"}}`),
 			wantError: true,
 		},
 		{
 			name:      "suggestions reject a provider without a model",
-			analyzer:  complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"provider":"openai"}`),
+			analyzer:  complexityAnalyzerSchemaConfig(suggestionsSchemaPrereqs, `,"suggestions":{"enabled":true,"provider":"openai"}`),
 			wantError: true,
 		},
 		{
 			name:      "suggestions reject a cluster budget below 1000",
-			analyzer:  complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"max_clustered_requests":10}`),
+			analyzer:  complexityAnalyzerSchemaConfig(suggestionsSchemaPrereqs, `,"suggestions":{"enabled":true,"max_clustered_requests":10}`),
 			wantError: true,
 		},
 		{
@@ -2650,6 +2678,13 @@ func TestSchemaComplexityAnalyzerDependencies(t *testing.T) {
 		})
 	}
 }
+
+// semanticSchemaBlock and suggestionsSchemaPrereqs satisfy what enabled
+// suggestions require, so a suggestions case fails only on what it tests.
+const (
+	semanticSchemaBlock      = `,"semantic":{"provider":"openai","embedding_model":"text-embedding-3-small"}`
+	suggestionsSchemaPrereqs = semanticSchemaBlock + `,"llm":{"provider":"openai","model":"gpt-4.1-mini"}`
+)
 
 func complexityAnalyzerSchemaConfig(fields ...string) string {
 	return `{"keywords":{"simple_keywords":["simple"],"medium_keywords":["medium"],"complex_keywords":["complex"]}` + strings.Join(fields, "") + `}`
