@@ -594,6 +594,8 @@ var configstoreMigrationSteps = []migrationStep{
 	{IDs: []string{"add_usage_estimation_tokenizers_json_column"}, run: migrationAddUsageEstimationTokenizersJSONColumn},
 	{IDs: []string{"add_complexity_suggestion_schedules_table"}, run: migrationAddComplexitySuggestionSchedulesTable},
 	{IDs: []string{"add_model_routers_table"}, run: migrationAddModelRoutersTable},
+	{IDs: []string{"add_model_routing_rules_tables"}, run: migrationAddModelRoutingRulesTables},
+	{IDs: []string{"add_model_routing_rule_query_column"}, run: migrationAddModelRoutingRuleQueryColumn},
 }
 
 // warpLogEmbeddingColumns are the semantic-search configuration columns added
@@ -13774,6 +13776,58 @@ func migrationAddModelRoutersTable(ctx context.Context, db *gorm.DB, logger sche
 			return fmt.Errorf("%s is non-rollbackable: dropping model_routers would delete every router except the default", migrationName)
 		},
 	})
+}
+
+// migrationAddModelRoutingRulesTables creates the model routing rules and
+// their per-tier targets. Nothing exists to move into them: until now a
+// routing rule's complexity_tier condition was the only way to route by tier,
+// and those rules keep working against the default router.
+func migrationAddModelRoutingRulesTables(ctx context.Context, db *gorm.DB, logger schemas.Logger) error {
+	migrationName := "add_model_routing_rules_tables"
+	logger.Info("[configstore] starting migration %s", migrationName)
+	defer logger.Info("[configstore] finished migration %s", migrationName)
+	return RunSingleMigration(ctx, nil, db, logger, &migrator.Migration{
+		ID: migrationName,
+		Migrate: func(tx *gorm.DB) error {
+			return tx.WithContext(ctx).AutoMigrate(&tables.TableModelRoutingRule{}, &tables.TableModelRoutingTarget{})
+		},
+		Rollback: func(*gorm.DB) error {
+			return fmt.Errorf("%s is non-rollbackable: dropping the tables would delete every model routing rule", migrationName)
+		},
+	})
+}
+
+// migrationAddModelRoutingRuleQueryColumn adds the query column, the
+// dashboard's condition builder state, to model_routing_rules. Tables created
+// after the column joined the struct already have it.
+func migrationAddModelRoutingRuleQueryColumn(ctx context.Context, db *gorm.DB, logger schemas.Logger) error {
+	migrationName := "add_model_routing_rule_query_column"
+	logger.Info("[configstore] starting migration %s", migrationName)
+	defer logger.Info("[configstore] finished migration %s", migrationName)
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: migrationName,
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			if err := setMigrationLockTimeout(tx); err != nil {
+				return err
+			}
+			if err := addColumnIfNotExists(tx, logger, &tables.TableModelRoutingRule{}, "Query"); err != nil {
+				return fmt.Errorf("add query column to model_routing_rules: %w", err)
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			if err := dropColumnIfExists(tx, logger, &tables.TableModelRoutingRule{}, "Query"); err != nil {
+				return fmt.Errorf("drop query column from model_routing_rules: %w", err)
+			}
+			return nil
+		},
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error running %s migration: %w", migrationName, err)
+	}
+	return nil
 }
 
 func appendMissingDefaultComplexityExemplars(config *ComplexityAnalyzerConfig, defaults ComplexityEditableKeywordConfig) int {

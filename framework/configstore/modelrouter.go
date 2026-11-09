@@ -489,20 +489,33 @@ func (s *RDBConfigStore) UpdateModelRouter(ctx context.Context, router *ModelRou
 	})
 }
 
-// DeleteModelRouter removes a router. The default router cannot be deleted.
+// DeleteModelRouter removes a router. The default router cannot be deleted,
+// and neither can a router model routing rules still name: that is a
+// *ModelRouterInUseError listing them. The router's row is locked before the
+// check, as a rule save locks it too, so a rule saved concurrently either
+// commits first and is counted, or finds the router gone.
 func (s *RDBConfigStore) DeleteModelRouter(ctx context.Context, id string, tx ...*gorm.DB) error {
 	id = strings.TrimSpace(id)
 	if id == DefaultModelRouterID {
 		return ErrDefaultModelRouter
 	}
-	result := s.modelRouterDB(tx).WithContext(ctx).Delete(&tables.TableModelRouter{}, "id = ?", id)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.inModelRouterTx(ctx, tx, func(txDB *gorm.DB) error {
+		row, err := s.lockModelRouterRow(ctx, txDB, id)
+		if err != nil {
+			return err
+		}
+		if row == nil {
+			return ErrNotFound
+		}
+		names, err := modelRoutingRulesUsingRouter(ctx, txDB, id)
+		if err != nil {
+			return err
+		}
+		if len(names) > 0 {
+			return &ModelRouterInUseError{RouterID: id, RuleNames: names}
+		}
+		return txDB.WithContext(ctx).Delete(&tables.TableModelRouter{}, "id = ?", id).Error
+	})
 }
 
 // ResetModelRouter restores a router's tier boundaries and phrase lists from

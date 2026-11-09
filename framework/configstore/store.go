@@ -379,6 +379,14 @@ type ConfigStore interface {
 	DeleteModelRouter(ctx context.Context, id string, tx ...*gorm.DB) error
 	ResetModelRouter(ctx context.Context, id string, defaults *ComplexityAnalyzerConfig) (*ModelRouter, error)
 
+	// Model routing rules CRUD. A rule picks which requests a model router
+	// classifies and which model each tier gets, after the routing rules.
+	GetModelRoutingRules(ctx context.Context) ([]tables.TableModelRoutingRule, error)
+	GetModelRoutingRule(ctx context.Context, id string) (*tables.TableModelRoutingRule, error)
+	CreateModelRoutingRule(ctx context.Context, rule *tables.TableModelRoutingRule, tx ...*gorm.DB) error
+	UpdateModelRoutingRule(ctx context.Context, rule *tables.TableModelRoutingRule, tx ...*gorm.DB) error
+	DeleteModelRoutingRule(ctx context.Context, id string, tx ...*gorm.DB) error
+
 	// Plugins CRUD
 	GetPlugins(ctx context.Context) ([]*tables.TablePlugin, error)
 	GetPlugin(ctx context.Context, name string) (*tables.TablePlugin, error)

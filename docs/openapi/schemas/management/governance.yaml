@@ -3665,3 +3665,179 @@ ComplexitySuggestionRunEstimate:
     max_model_calls:
       type: integer
       description: The most suggestion-model calls the run could make.
+
+ModelRouter:
+  type: object
+  description: A model router - an id, a name and a description beside the same settings as ComplexityAnalyzerConfig, sent and returned at the top level. "default" is the default router, the one a routing rule's complexity_tier classifies with.
+  additionalProperties: false
+  required:
+    - name
+    - keywords
+  properties:
+    id:
+      type: string
+      maxLength: 64
+      pattern: '^[A-Za-z0-9_-]+$'
+      description: Stable router id; generated when omitted on create.
+    name:
+      type: string
+      minLength: 1
+      maxLength: 255
+      description: Display name, unique across routers. "Default" is reserved for the default router.
+    description:
+      type: string
+    tier_boundaries:
+      $ref: '#/ComplexityTierBoundaries'
+    keywords:
+      $ref: '#/ComplexityKeywordConfig'
+    classifier:
+      type: string
+      enum: [semantic, decision]
+      default: semantic
+      description: Primary complexity classifier.
+    semantic:
+      $ref: '#/ComplexitySemanticConfig'
+    decision:
+      $ref: '#/ComplexityDecisionConfig'
+    llm:
+      $ref: '#/ComplexityLLMConfig'
+    session:
+      $ref: '#/ComplexitySessionConfig'
+    suggestions:
+      $ref: '#/ComplexitySuggestionsConfig'
+
+ModelRouterList:
+  type: object
+  properties:
+    routers:
+      type: array
+      items:
+        $ref: '#/ModelRouter'
+    count:
+      type: integer
+
+ModelRoutingTarget:
+  type: object
+  description: One model for one tier of a model routing rule. Omitting provider or model keeps the request's value.
+  required:
+    - tier
+    - weight
+  dependentRequired:
+    key_id:
+      - provider
+  properties:
+    tier:
+      type: string
+      enum: [SIMPLE, MEDIUM, COMPLEX]
+    provider:
+      type: [string, 'null']
+      description: Target provider (omit to keep the request's provider). Moving to another provider clears a key the routing rules pinned.
+    model:
+      type: [string, 'null']
+      description: Target model (omit to keep the request's model)
+    key_id:
+      type: [string, 'null']
+      description: UUID of the API key to pin for this target
+    weight:
+      type: number
+      format: double
+      exclusiveMinimum: 0
+      description: Probability weight within the tier; the weights of a tier sum to 1.
+    ttft_timeout_ms:
+      type: [integer, 'null']
+      minimum: 0
+      maximum: 300000
+      description: Time-to-first-token deadline in milliseconds for streaming requests routed to this target; 0 or omitted disables it.
+    fallbacks:
+      type: array
+      description: Fallback chain used when this target is chosen; it replaces the request's chain. Omit to keep the chain the routing rules set.
+      items:
+        $ref: '#/RoutingFallback'
+
+ModelRoutingRuleRequest:
+  type: object
+  required:
+    - name
+    - model_router_id
+    - targets
+  properties:
+    name:
+      type: string
+    description:
+      type: string
+    enabled:
+      type: boolean
+      description: Defaults to true on create; omitted on update keeps the stored value.
+    cel_expression:
+      type: string
+      description: Optional CEL condition over the request as the routing rules left it. Empty matches every request in scope. Cannot use complexity_tier.
+    query:
+      type: [object, 'null']
+      description: Visual rule tree structure from query builder. Not evaluated; cel_expression is.
+    model_router_id:
+      type: string
+      description: The model router that classifies the request.
+    scope:
+      type: string
+      enum: [global, team, customer, virtual_key, user]
+      default: global
+    scope_id:
+      type: [string, 'null']
+      description: ID of the scope's entity; required for non-global scopes.
+    priority:
+      type: integer
+      description: Order within the scope; lower runs first. Unique per scope among model routing rules.
+    targets:
+      type: array
+      minItems: 1
+      items:
+        $ref: '#/ModelRoutingTarget'
+
+ModelRoutingRule:
+  type: object
+  description: A model routing rule as stored.
+  properties:
+    id:
+      type: string
+    config_hash:
+      type: string
+      description: Hash of the config.json entry the rule was last synced from. Empty for rules created through the API.
+    name:
+      type: string
+    description:
+      type: string
+    enabled:
+      type: boolean
+    cel_expression:
+      type: string
+    query:
+      type: [object, 'null']
+      description: Visual rule tree structure from query builder
+    model_router_id:
+      type: string
+    scope:
+      type: string
+    scope_id:
+      type: [string, 'null']
+    priority:
+      type: integer
+    targets:
+      type: array
+      items:
+        $ref: '#/ModelRoutingTarget'
+    created_at:
+      type: string
+      format: date-time
+    updated_at:
+      type: string
+      format: date-time
+
+ModelRoutingRuleList:
+  type: object
+  properties:
+    rules:
+      type: array
+      items:
+        $ref: '#/ModelRoutingRule'
+    count:
+      type: integer

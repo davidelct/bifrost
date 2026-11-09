@@ -297,6 +297,10 @@ const (
 	BifrostContextKeyGovernanceComplexityTier            BifrostContextKey = "bifrost-governance-complexity-tier"      // string (complexity tier computed for routing, e.g. "SIMPLE"/"MEDIUM"/"COMPLEX"; only present when a routing rule referenced complexity_tier and classification produced a tier (set by bifrost routing plugin - DO NOT SET THIS MANUALLY))
 	BifrostContextKeyGovernanceComplexityMechanism       BifrostContextKey = "bifrost-governance-complexity-mechanism" // string (how the effective complexity tier was determined: "semantic", "decision", "llm", "session", or "skipped" when classification was demanded but produced no tier; only present when a routing rule referenced complexity_tier (set by bifrost routing plugin - DO NOT SET THIS MANUALLY))
 	BifrostContextKeyGovernanceComplexityScore           BifrostContextKey = "bifrost-governance-complexity-score"     // float64 (classifier score behind the tier: the semantic classifier's similarity to the nearest reference phrase; only present alongside a computed tier (set by bifrost routing plugin - DO NOT SET THIS MANUALLY))
+	BifrostContextKeyModelRouterID                       BifrostContextKey = "bifrost-model-router-id"                 // string (ID of the model router whose tier was used: the router a matched model routing rule names, or the default router for a routing rule's complexity_tier (set by bifrost routing plugin - DO NOT SET THIS MANUALLY))
+	BifrostContextKeyModelRouterName                     BifrostContextKey = "bifrost-model-router-name"               // string (name of the model router in BifrostContextKeyModelRouterID (set by bifrost routing plugin - DO NOT SET THIS MANUALLY))
+	BifrostContextKeyModelRoutingRuleID                  BifrostContextKey = "bifrost-model-routing-rule-id"           // string (ID of the model routing rule that matched the request (set by bifrost routing plugin - DO NOT SET THIS MANUALLY))
+	BifrostContextKeyModelRoutingRuleName                BifrostContextKey = "bifrost-model-routing-rule-name"         // string (name of the model routing rule that matched the request (set by bifrost routing plugin - DO NOT SET THIS MANUALLY))
 	BifrostContextKeyRoutingPinnedAPIKeyID               BifrostContextKey = "bifrost-routing-pinned-api-key-id"       // string (provider key ID pinned by a matched routing rule target; resolved against the configured key pool during key selection and takes precedence over a caller-supplied pin (set by bifrost governance plugin - DO NOT SET THIS MANUALLY))
 	BifrostContextKeySelectedPromptName                  BifrostContextKey = "bifrost-selected-prompt-name"            // string (display name of the selected prompt (set by prompts plugin - DO NOT SET THIS MANUALLY))
 	BifrostContextKeySelectedPromptVersion               BifrostContextKey = "bifrost-selected-prompt-version"         // string (numeric version as string, e.g. "3" (set by prompts plugin - DO NOT SET THIS MANUALLY))
@@ -699,6 +703,10 @@ const (
 	RoutingEngineLoadbalancing  = "loadbalancing"
 	RoutingEngineModelCatalog   = "model-catalog"
 	RoutingEngineCircuitBreaker = "circuit-breaker"
+	// RoutingEngineModelRouter marks a model routing rule's decision: a model
+	// router classified the request and the rule's target for that tier was
+	// applied after the routing rules.
+	RoutingEngineModelRouter = "model-router"
 	// RoutingEngineSessionAffinity marks decisions a session made for the request:
 	// staying on the provider or key that served it before, ahead of what the
 	// routing engines proposed. Recorded so the request's trail says why it went

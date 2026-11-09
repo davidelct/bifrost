@@ -355,6 +355,7 @@ var logstoreMigrationSteps = []migrationStep{
 	{IDs: []string{"relay_logs_add_correlation_columns"}, run: migrationAddRelayLogCorrelationColumns},
 	{IDs: []string{"mcp_tool_logs_add_round_trip_id_column"}, run: migrationAddRoundTripIDColumnToMCPToolLogs},
 	{IDs: []string{"logs_add_complexity_suggestion_tables"}, run: migrationAddComplexitySuggestionTables},
+	{IDs: []string{"logs_add_model_routing_columns"}, run: migrationAddModelRoutingColumns},
 }
 
 // areThereAnyPendingMigrations returns true if there are any pending migrations to be applied.
@@ -3009,6 +3010,16 @@ var performanceIndexes = []performanceIndexDef{
 	},
 	{
 		table: "logs",
+		name:  "idx_logs_model_router_id",
+		sql:   "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_logs_model_router_id ON logs(model_router_id) WHERE model_router_id IS NOT NULL",
+	},
+	{
+		table: "logs",
+		name:  "idx_logs_model_routing_rule_id",
+		sql:   "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_logs_model_routing_rule_id ON logs(model_routing_rule_id) WHERE model_routing_rule_id IS NOT NULL",
+	},
+	{
+		table: "logs",
 		name:  "idx_logs_session_id",
 		sql:   "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_logs_session_id ON logs(session_id) WHERE session_id IS NOT NULL",
 	},
@@ -4516,6 +4527,50 @@ func migrationAddComplexityRoutingColumns(ctx context.Context, db *gorm.DB, logg
 	}})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("error while adding complexity routing columns: %w", err)
+	}
+	return nil
+}
+
+// migrationAddModelRoutingColumns adds model_router_id, model_router_name,
+// model_routing_rule_id and model_routing_rule_name to the logs table. They
+// record which model router's tier routed a request and which model routing
+// rule chose it; all four stay NULL for requests no router classified.
+func migrationAddModelRoutingColumns(ctx context.Context, db *gorm.DB, logger schemas.Logger) error {
+	migrationName := "logs_add_model_routing_columns"
+	logger.Info("[logstore] starting migration %s", migrationName)
+	defer logger.Info("[logstore] finished migration %s", migrationName)
+	columns := []string{"model_router_id", "model_router_name", "model_routing_rule_id", "model_routing_rule_name"}
+	opts := *migrator.DefaultOptions
+	opts.UseTransaction = true
+	m := migrator.New(db, &opts, []*migrator.Migration{{
+		ID: migrationName,
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			if err := boundDDLLockWait(tx); err != nil {
+				return err
+			}
+			for _, column := range columns {
+				if err := addColumnIfNotExists(tx, logger, &Log{}, column); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			if err := boundDDLLockWait(tx); err != nil {
+				return err
+			}
+			for _, column := range columns {
+				if err := dropColumnIfExists(tx, logger, &Log{}, column); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error while adding model routing columns: %w", err)
 	}
 	return nil
 }

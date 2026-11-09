@@ -1202,6 +1202,20 @@ paths:
     $ref: "./paths/management/routing.yaml#/complexity-suggestion"
   /api/routing/complexity-suggestions/{suggestion_id}/status:
     $ref: "./paths/management/routing.yaml#/complexity-suggestion-status"
+  /api/routing/model-routers:
+    $ref: "./paths/management/routing.yaml#/model-routers"
+  /api/routing/model-routers/{router_id}:
+    $ref: "./paths/management/routing.yaml#/model-routers-by-id"
+  /api/routing/model-routers/{router_id}/reset:
+    $ref: "./paths/management/routing.yaml#/model-router-reset"
+  /api/routing/model-routers/{router_id}/status:
+    $ref: "./paths/management/routing.yaml#/model-router-status"
+  /api/routing/model-routers/{router_id}/status/retry:
+    $ref: "./paths/management/routing.yaml#/model-router-status-retry"
+  /api/routing/model-routing-rules:
+    $ref: "./paths/management/routing.yaml#/model-routing-rules"
+  /api/routing/model-routing-rules/{rule_id}:
+    $ref: "./paths/management/routing.yaml#/model-routing-rules-by-id"
 
   # Routing - deprecated paths, kept so existing clients keep working
   /api/governance/routing-rules:
@@ -2337,6 +2351,20 @@ components:
       $ref: "./schemas/management/governance.yaml#/CreateRoutingRuleRequest"
     UpdateRoutingRuleRequest:
       $ref: "./schemas/management/governance.yaml#/UpdateRoutingRuleRequest"
+
+    # Routing - Model Routers
+    ModelRouter:
+      $ref: "./schemas/management/governance.yaml#/ModelRouter"
+    ModelRouterList:
+      $ref: "./schemas/management/governance.yaml#/ModelRouterList"
+    ModelRoutingTarget:
+      $ref: "./schemas/management/governance.yaml#/ModelRoutingTarget"
+    ModelRoutingRule:
+      $ref: "./schemas/management/governance.yaml#/ModelRoutingRule"
+    ModelRoutingRuleRequest:
+      $ref: "./schemas/management/governance.yaml#/ModelRoutingRuleRequest"
+    ModelRoutingRuleList:
+      $ref: "./schemas/management/governance.yaml#/ModelRoutingRuleList"
     TableKey:
       $ref: "./schemas/management/governance.yaml#/TableKey"
 

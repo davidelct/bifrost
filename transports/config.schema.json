@@ -2374,6 +2374,13 @@
         "$ref": "#/$defs/model_router"
       }
     },
+    "model_routing_rules": {
+      "type": "array",
+      "description": "Model routing rules, matched after the routing rules: the first that matches names a model router, the router classifies the request into SIMPLE, MEDIUM or COMPLEX, and that tier's target replaces the provider and model. Unless config.json is the source of truth, a rule is re-applied only when its entry changes.",
+      "items": {
+        "$ref": "#/$defs/model_routing_rule"
+      }
+    },
     "mcp": {
       "type": "object",
       "description": "Model Context Protocol configuration",
@@ -7295,6 +7302,166 @@
           }
         }
       ],
+      "additionalProperties": false
+    },
+    "model_routing_rule": {
+      "type": "object",
+      "description": "One model routing rule: which requests a model router classifies, and the model each tier gets.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable rule id."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Rule name, unique within its scope."
+        },
+        "description": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether the rule is enabled"
+        },
+        "cel_expression": {
+          "type": "string",
+          "description": "Optional CEL condition over the request as the routing rules left it (model, provider, headers and so on). Empty matches every request in the rule's scope. It cannot use complexity_tier: the rule's router decides the tier after the rule matches."
+        },
+        "query": {
+          "description": "Visual rule builder state for the management UI (react-querybuilder). Omitted unless exported from the dashboard. Not evaluated at routing runtime (cel_expression is). When present, must include combinator and rules[] so arbitrary metadata cannot be mistaken for builder state.",
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "combinator",
+                "rules"
+              ],
+              "properties": {
+                "combinator": {
+                  "type": "string",
+                  "enum": [
+                    "and",
+                    "or"
+                  ]
+                },
+                "rules": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  },
+                  "description": "Leaf rules (field, operator, value) and/or nested combinator+rules groups from the query builder."
+                }
+              },
+              "additionalProperties": true
+            }
+          ]
+        },
+        "model_router_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The model router that classifies the request. \"default\" is the default router."
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "global",
+            "team",
+            "customer",
+            "virtual_key"
+          ],
+          "default": "global",
+          "description": "Rule scope level. User-scoped rules can be created through the API only. A rule whose scope_id does not resolve is skipped at load with a warning."
+        },
+        "scope_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "ID (not name) of the team, customer or virtual key. Required for non-global scopes; ignored for global."
+        },
+        "priority": {
+          "type": "integer",
+          "description": "Evaluation order within the rule's scope; lower runs first. Unique within the scope among model routing rules, separate from routing rule priorities."
+        },
+        "targets": {
+          "type": "array",
+          "minItems": 1,
+          "description": "The model each tier gets. A tier with no target keeps the request's model; weights within a tier sum to 1.",
+          "items": {
+            "$ref": "#/$defs/model_routing_target"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "model_router_id",
+        "targets"
+      ],
+      "additionalProperties": false
+    },
+    "model_routing_target": {
+      "type": "object",
+      "description": "One model for one tier of a model routing rule. Omitting provider or model keeps the request's value.",
+      "properties": {
+        "tier": {
+          "type": "string",
+          "enum": [
+            "SIMPLE",
+            "MEDIUM",
+            "COMPLEX"
+          ]
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Target provider name (e.g., 'openai', 'azure'). Omit to use the incoming request provider"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Target model name. Omit to use the incoming request model"
+        },
+        "key_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional provider key ID to pin for this target. Requires provider. Not together with provider_key_name."
+        },
+        "weight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "description": "Probability weight within the tier (must be > 0). All weights in a tier must sum to 1"
+        },
+        "ttft_timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300000,
+          "description": "Time-to-first-token (TTFT) deadline in milliseconds for streaming requests routed to this target. An attempt that produces no first token in time is cut off and the next fallback runs. The last attempt is never cut off, so the setting only takes effect when fallbacks exist. Omit to disable."
+        },
+        "fallbacks": {
+          "type": "array",
+          "description": "Fallback chain used when this target is chosen; it replaces the request's chain. Omit to keep the chain the routing rules set.",
+          "items": {
+            "$ref": "#/$defs/routing_fallback"
+          }
+        }
+      },
+      "required": [
+        "tier",
+        "weight"
+      ],
+      "dependentRequired": {
+        "key_id": [
+          "provider"
+        ]
+      },
       "additionalProperties": false
     },
     "complexity_suggestions_config": {
