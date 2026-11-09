@@ -18,20 +18,21 @@ import { EmbeddingSupportedProviders } from "@/lib/constants/logs";
 import { getErrorMessage, useGetCoreConfigQuery, useGetProvidersQuery } from "@/lib/store";
 import { useGetAllKeysQuery } from "@/lib/store/apis/providersApi";
 import {
-	useGetComplexityAnalyzerConfigQuery,
-	useGetComplexitySemanticStatusQuery,
 	useGetComplexitySuggestionsQuery,
+	useGetModelRouterQuery,
+	useDeleteModelRouterMutation,
+	useGetModelRouterStatusQuery,
+	useResetModelRouterMutation,
+	useRetryModelRouterWarmupMutation,
 	useUpdateComplexitySuggestionStatusMutation,
-	useRetryComplexitySemanticWarmupMutation,
-	useResetComplexityAnalyzerConfigMutation,
-	useUpdateComplexityAnalyzerConfigMutation,
+	useUpdateModelRouterMutation,
 } from "@/lib/store/apis/governanceApi";
-import { DecisionTier, MAX_SEMANTIC_PHRASES, Suggestion } from "@/lib/types/complexityRouter";
+import { DecisionTier, DEFAULT_COMPLEXITY_ROUTER_ID, MAX_SEMANTIC_PHRASES, Suggestion } from "@/lib/types/complexityRouter";
 import { ModelProvider } from "@/lib/types/config";
 import { DBKey } from "@/lib/types/governance";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ArrowLeft, ArrowRight, ExternalLink, LoaderCircle, RotateCcw, Save, Settings2, TriangleAlert } from "lucide-react";
+import { ArrowLeft, ArrowRight, ExternalLink, LoaderCircle, Pencil, RotateCcw, Save, Settings2, Trash2, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { parseAsStringLiteral, useQueryState } from "nuqs";
@@ -51,12 +52,14 @@ import {
 	toAnalyzerPayload,
 	toFormValues,
 	shouldSeedLLMPrompt,
-} from "./formSchema";
-import { ClassifierStatusBadge } from "./views/classifierStatusBadge";
-import EmbeddingConfigSheet from "./views/embeddingConfigSheet";
-import DecisionSettingsSheet from "./views/decisionSettingsSheet";
-import SuggestionSettingsSheet from "./views/suggestionSettingsSheet";
-import SuggestionsTab from "./views/suggestionsTab";
+} from "../formSchema";
+import { ClassifierStatusBadge } from "./classifierStatusBadge";
+import EmbeddingConfigSheet from "./embeddingConfigSheet";
+import DecisionSettingsSheet from "./decisionSettingsSheet";
+import SuggestionSettingsSheet from "./suggestionSettingsSheet";
+import SuggestionsTab from "./suggestionsTab";
+import { RouterRulesSummary } from "./modelRoutingRulesView";
+import RouterDetailsDialog from "./routerDetailsDialog";
 import {
 	addPhrases,
 	newPhrases,
@@ -65,8 +68,8 @@ import {
 	StagedSuggestion,
 	stagedPhraseCount,
 	stillStaged,
-} from "./views/suggestions.utils";
-import { SectionHeading } from "./views/formPrimitives";
+} from "./suggestions.utils";
+import { SectionHeading } from "./formPrimitives";
 import {
 	ClassifierChoice,
 	DecisionFields,
@@ -76,7 +79,7 @@ import {
 	SessionRoutingCard,
 	StepRail,
 	DecisionProviderAlert,
-} from "./views/sections";
+} from "./sections";
 
 // Embedding-capable providers gate this page, matching the local cache screen's
 // rule: built-ins are listed in EmbeddingSupportedProviders, custom providers
@@ -112,17 +115,34 @@ const supportsChat = (provider: ModelProvider): boolean => {
 	return true;
 };
 
-export default function ComplexityRouterPage() {
+interface ModelRouterDetailViewProps {
+	routerId: string;
+	onBack: () => void;
+	onOpenRules: () => void;
+	// A router just started fresh opens on the classifier choice, even though it
+	// starts from the Default router's classifier, so choosing one comes first.
+	initialStep?: "classifier";
+}
+
+// ModelRouterDetailView configures one model router: its classifier, phrase
+// lists and suggestions. The default router is the former complexity router.
+export default function ModelRouterDetailView({ routerId, onBack, onOpenRules, initialStep }: ModelRouterDetailViewProps) {
 	const { t } = useTranslation("models");
 	const { t: tc } = useTranslation("common");
 	const { t: tcpx } = useTranslation("models", { keyPrefix: "routing.complexityUi" });
-	const canUpdate = useRbac(RbacResource.RoutingRules, RbacOperation.Update);
-	const { data, isLoading, isFetching, error, refetch } = useGetComplexityAnalyzerConfigQuery(undefined, {
+	const canUpdate = useRbac(RbacResource.Governance, RbacOperation.Update);
+	const { data, isLoading, isFetching, error, refetch } = useGetModelRouterQuery(routerId, {
 		refetchOnMountOrArgChange: true,
 	});
-	const [updateConfig, { isLoading: isSaving }] = useUpdateComplexityAnalyzerConfigMutation();
-	const [resetConfig, { isLoading: isResetting }] = useResetComplexityAnalyzerConfigMutation();
-	const [retrySemanticWarmup, { isLoading: isRetryingWarmup }] = useRetryComplexitySemanticWarmupMutation();
+	const [updateConfig, { isLoading: isSaving }] = useUpdateModelRouterMutation();
+	const [resetConfig, { isLoading: isResetting }] = useResetModelRouterMutation();
+	const [retrySemanticWarmup, { isLoading: isRetryingWarmup }] = useRetryModelRouterWarmupMutation();
+	const { t: tmr } = useTranslation("models", { keyPrefix: "routing.modelRouters" });
+	const canDelete = useRbac(RbacResource.Governance, RbacOperation.Delete);
+	const [deleteRouter, { isLoading: isDeleting }] = useDeleteModelRouterMutation();
+	const [detailsOpen, setDetailsOpen] = useState(false);
+	const [deleteOpen, setDeleteOpen] = useState(false);
+	const [deleteError, setDeleteError] = useState<string | null>(null);
 
 	const [submitError, setSubmitError] = useState<string | null>(null);
 	const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
@@ -140,7 +160,7 @@ export default function ComplexityRouterPage() {
 	const [updateSuggestionStatus] = useUpdateComplexitySuggestionStatusMutation();
 	// The open step. Null follows the saved config: a router with nothing set
 	// up opens on the classifier choice, an existing one straight on its setup.
-	const [openStep, setOpenStep] = useState<"classifier" | "setup" | null>(null);
+	const [openStep, setOpenStep] = useState<"classifier" | "setup" | null>(initialStep ?? null);
 	// Whether a classifier has been picked on this visit. A new router's form
 	// defaults to "semantic", which is not a choice the operator made.
 	const [picked, setPicked] = useState(false);
@@ -239,7 +259,7 @@ export default function ComplexityRouterPage() {
 	const step = openStep ?? (canUpdate && !hasClassifier ? "classifier" : "setup");
 	// The tab's pending count; the tab itself reads the same cached list.
 	const { data: openSuggestions } = useGetComplexitySuggestionsQuery(
-		{ statuses: ["open"] },
+		{ statuses: ["open"], routerId },
 		{ skip: step !== "setup" || liveClassifier !== "semantic" },
 	);
 
@@ -264,7 +284,7 @@ export default function ComplexityRouterPage() {
 		isFetching: statusFetching,
 		isError: statusIsError,
 		refetch: refetchStatus,
-	} = useGetComplexitySemanticStatusQuery(undefined, {
+	} = useGetModelRouterStatusQuery(routerId, {
 		skip: !data?.semantic && !data?.llm && !isLLMFallbackEnabled && !isDecisionInUse,
 		pollingInterval: statusPollInterval,
 	});
@@ -441,7 +461,7 @@ export default function ComplexityRouterPage() {
 	const handleRestoreDefaults = () => {
 		if (!canUpdate) return;
 		setSubmitError(null);
-		resetConfig()
+		resetConfig(routerId)
 			.unwrap()
 			.then((defaults) => {
 				promptEdited.current = false;
@@ -454,9 +474,23 @@ export default function ComplexityRouterPage() {
 			});
 	};
 
+	// A router that model routing rules still name cannot be deleted; the
+	// gateway's refusal names them, so it is shown as it comes.
+	const handleDelete = () => {
+		setDeleteError(null);
+		deleteRouter(routerId)
+			.unwrap()
+			.then(() => {
+				toast.success(tmr("deleted"), { position: "top-right" });
+				setDeleteOpen(false);
+				onBack();
+			})
+			.catch((err) => setDeleteError(getErrorMessage(err)));
+	};
+
 	const handleRetrySemanticWarmup = () => {
 		if (!canUpdate) return;
-		retrySemanticWarmup()
+		retrySemanticWarmup(routerId)
 			.unwrap()
 			.then(() => {
 				toast.success(tcpx("warmupRestarted"), { position: "top-right" });
@@ -487,7 +521,8 @@ export default function ComplexityRouterPage() {
 		const payload = toAnalyzerPayload(values, data);
 		// Taken before the save: staging is cleared with the form afterwards.
 		const accepting = activeStaged;
-		updateConfig(payload)
+		// The router's identity rides along unchanged; it is edited on its own.
+		updateConfig({ ...payload, id: routerId, name: data?.name ?? "", description: data?.description })
 			.unwrap()
 			.then((res) => {
 				promptEdited.current = false;
@@ -501,12 +536,12 @@ export default function ComplexityRouterPage() {
 				// what stops later runs proposing them again. A failure here is
 				// reported but harmless: the next run finds them covered.
 				if (accepting.length === 0) return;
-				void Promise.allSettled(accepting.map((entry) => updateSuggestionStatus({ id: entry.id, status: "accepted" }).unwrap())).then(
-					(results) => {
-						const failed = results.filter((result) => result.status === "rejected").length;
-						if (failed > 0) toast.warning(tcpx("suggestions.acceptFailed", { count: failed }), { position: "top-right" });
-					},
-				);
+				void Promise.allSettled(
+					accepting.map((entry) => updateSuggestionStatus({ id: entry.id, status: "accepted", routerId }).unwrap()),
+				).then((results) => {
+					const failed = results.filter((result) => result.status === "rejected").length;
+					if (failed > 0) toast.warning(tcpx("suggestions.acceptFailed", { count: failed }), { position: "top-right" });
+				});
 			})
 			.catch((err) => {
 				setSubmitError(tcpx("saveFailed", { error: getErrorMessage(err) }));
@@ -541,9 +576,15 @@ export default function ComplexityRouterPage() {
 			<div className="mx-auto w-full max-w-7xl space-y-4 px-4 pt-6 sm:px-6 sm:pt-8 lg:px-14">
 				<p className="text-sm font-medium">{t("routing.complexityLoadFailed")}</p>
 				<p className="text-muted-foreground text-sm">{getErrorMessage(error)}</p>
-				<Button data-testid="complexity-router-fetch-retry-button" type="button" variant="outline" size="sm" onClick={() => refetch()}>
-					{tc("retry")}
-				</Button>
+				<div className="flex gap-2">
+					<Button data-testid="complexity-router-fetch-retry-button" type="button" variant="outline" size="sm" onClick={() => refetch()}>
+						{tc("retry")}
+					</Button>
+					<Button data-testid="model-router-fetch-back-button" type="button" variant="ghost" size="sm" onClick={onBack}>
+						<ArrowLeft className="size-4" />
+						{tmr("title")}
+					</Button>
+				</div>
 			</div>
 		);
 	}
@@ -552,9 +593,15 @@ export default function ComplexityRouterPage() {
 		return (
 			<div className="mx-auto w-full max-w-7xl space-y-4 px-4 pt-6 sm:px-6 sm:pt-8 lg:px-14">
 				<p className="text-muted-foreground font-mono text-sm">{t("routing.complexityUnavailable")}</p>
-				<Button data-testid="complexity-router-fetch-retry-button" type="button" variant="outline" size="sm" onClick={() => refetch()}>
-					{tc("retry")}
-				</Button>
+				<div className="flex gap-2">
+					<Button data-testid="complexity-router-fetch-retry-button" type="button" variant="outline" size="sm" onClick={() => refetch()}>
+						{tc("retry")}
+					</Button>
+					<Button data-testid="model-router-fetch-back-button" type="button" variant="ghost" size="sm" onClick={onBack}>
+						<ArrowLeft className="size-4" />
+						{tmr("title")}
+					</Button>
+				</div>
 			</div>
 		);
 	}
@@ -658,7 +705,7 @@ export default function ComplexityRouterPage() {
 			<form className="no-padding-parent flex h-full min-h-0 w-full flex-col p-4" onSubmit={submit} noValidate>
 				{/* PageTitle renders nothing inline; its badge and description are
 				    portalled into the topbar. */}
-				<PageTitle title={t("routing.complexityTitle")} beta>
+				<PageTitle breadcrumbs={[{ label: tmr("title"), to: "/workspace/model-routers" }, { label: data.name }]} beta>
 					<Trans
 						t={t}
 						i18nKey={liveClassifier === "decision" ? "routing.complexityUi.descriptionDecision" : "routing.complexityUi.description"}
@@ -668,6 +715,56 @@ export default function ComplexityRouterPage() {
 					{isSemantic && liveSemantic?.fallback === "decision" ? ` ${tcpx("descriptionDecisionFallback")}` : ""}
 					{liveSession.enabled ? ` ${tcpx("descriptionSession")}` : ""}
 				</PageTitle>
+
+				<div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+					<div className="min-w-0 space-y-1.5">
+						<Button
+							type="button"
+							variant="ghost"
+							size="sm"
+							onClick={onBack}
+							className="text-muted-foreground -ml-2 h-7 px-2"
+							data-testid="model-router-back-button"
+						>
+							<ArrowLeft className="size-4" />
+							{tmr("title")}
+						</Button>
+						<h1 className="truncate text-xl font-semibold" data-testid="model-router-name">
+							{data.name}
+						</h1>
+						{data.description && <p className="text-muted-foreground text-sm">{data.description}</p>}
+						<RouterRulesSummary routerId={routerId} onOpenRules={onOpenRules} />
+					</div>
+					{canUpdate && (
+						<div className="flex shrink-0 gap-2">
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								onClick={() => setDetailsOpen(true)}
+								data-testid="model-router-edit-details-button"
+							>
+								<Pencil className="size-4" />
+								{tmr("editDetails")}
+							</Button>
+							{routerId !== DEFAULT_COMPLEXITY_ROUTER_ID && canDelete && (
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									onClick={() => {
+										setDeleteError(null);
+										setDeleteOpen(true);
+									}}
+									data-testid="model-router-delete-button"
+								>
+									<Trash2 className="size-4" />
+									{tc("delete")}
+								</Button>
+							)}
+						</div>
+					)}
+				</div>
 
 				{/* Same shape as the Edge inventory page: a slim step nav on the
 				    left, the open step on the right. It spans the full content width
@@ -786,6 +883,7 @@ export default function ComplexityRouterPage() {
 
 								{showSuggestions && (
 									<SuggestionsTab
+										routerId={routerId}
 										canUpdate={canUpdate}
 										enabled={Boolean(data.suggestions?.enabled)}
 										lookbackDays={data.suggestions?.lookback_days ?? liveSuggestions.lookback_days}
@@ -1038,6 +1136,37 @@ export default function ComplexityRouterPage() {
 							disabled={!canUpdate || isResetting}
 						>
 							{t("routing.restoreDefaults")}
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
+
+			<RouterDetailsDialog open={detailsOpen} onOpenChange={setDetailsOpen} router={data} />
+
+			<AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>{tmr("deleteTitle", { name: data.name })}</AlertDialogTitle>
+						<AlertDialogDescription>{tmr("deleteDescription")}</AlertDialogDescription>
+					</AlertDialogHeader>
+					{deleteError && (
+						<p className="text-destructive text-sm" role="alert" data-testid="model-router-delete-error">
+							{deleteError}
+						</p>
+					)}
+					<AlertDialogFooter>
+						<AlertDialogCancel data-testid="model-router-delete-cancel-button">{tc("cancel")}</AlertDialogCancel>
+						<AlertDialogAction
+							data-testid="model-router-delete-confirm-button"
+							className="bg-destructive hover:bg-destructive/90 text-white"
+							onClick={(event) => {
+								// Kept open on failure, so the reason shows in the dialog.
+								event.preventDefault();
+								handleDelete();
+							}}
+							disabled={isDeleting}
+						>
+							{tc("delete")}
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>

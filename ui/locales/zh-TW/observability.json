@@ -70,7 +70,9 @@
 			"decision": "決策模型",
 			"llm": "LLM",
 			"skipped": "已跳過"
-		}
+		},
+		"modelRouter": "模型路由器",
+		"modelRoutingRule": "模型路由規則"
 	},
 	"dashboard": {
 		"tabs": {
@@ -1228,7 +1230,10 @@
 		"exactRoundTripID": "精確往返 ID",
 		"nothingRecorded": "在此時間範圍內沒有任何記錄",
 		"topics": "主題",
-		"searchTopics": "搜尋主題"
+		"searchTopics": "搜尋主題",
+		"modelRouters": "模型路由器",
+		"searchModelRouters": "搜尋路由器",
+		"modelRoutingRules": "模型路由規則"
 	},
 	"requestTypes": {
 		"chat_completion": "對話",

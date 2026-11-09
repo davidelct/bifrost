@@ -23,6 +23,8 @@ interface CELRuleBuilderProps {
 	initialCel?: string;
 	onModeChange?: (mode: CELBuilderMode) => void;
 	celError?: string | null;
+	/** Field names the builder does not offer, e.g. complexity_tier where it cannot apply. */
+	excludeFields?: string[];
 }
 
 export function CELRuleBuilder({
@@ -37,10 +39,14 @@ export function CELRuleBuilder({
 	initialCel = "",
 	onModeChange,
 	celError = null,
+	excludeFields,
 }: CELRuleBuilderProps) {
 	const { i18n } = useTranslation();
 	// getRoutingFields copies the translated getters into plain strings, so rebuild on language change.
-	const fields = useMemo(() => getRoutingFields(providers, models), [providers, models, i18n.language]);
+	const fields = useMemo(
+		() => getRoutingFields(providers, models).filter((field) => !excludeFields?.includes(field.name)),
+		[providers, models, excludeFields, i18n.language],
+	);
 
 	return (
 		<BaseCELRuleBuilder

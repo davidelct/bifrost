@@ -18,7 +18,7 @@
 		"modelProviders": "Proveedores de modelos",
 		"budgetsLimits": "Presupuestos y límites",
 		"routingRules": "Reglas de enrutamiento",
-		"complexityRouter": "Enrutador por complejidad",
+		"modelRouter": "Enrutador de modelos",
 		"circuitBreaker": "Disyuntor",
 		"pricingOverrides": "Anulaciones de precios",
 		"modelSettings": "Ajustes de modelos",

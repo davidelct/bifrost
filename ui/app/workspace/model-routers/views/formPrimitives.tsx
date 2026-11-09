@@ -2,7 +2,7 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { Info } from "lucide-react";
+import { Check, Info } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -66,6 +66,59 @@ export function SectionHeading({ title, description, aside }: { title: string; d
 				{description && <p className="text-muted-foreground max-w-2xl text-xs leading-relaxed">{description}</p>}
 			</div>
 			{aside}
+		</div>
+	);
+}
+
+export interface RadioCardOption<T extends string> {
+	value: T;
+	title: string;
+	description: string;
+	icon?: ReactNode;
+}
+
+// RadioCards shows a choice as explained cards rather than a dropdown, for a
+// decision worth reading about before making it.
+export function RadioCards<T extends string>({
+	value,
+	options,
+	onChange,
+	ariaLabel,
+	testIdPrefix,
+}: {
+	value: T | undefined;
+	options: RadioCardOption<T>[];
+	onChange: (value: T) => void;
+	ariaLabel: string;
+	// Each card's test id is the prefix and its value, e.g. "<prefix>-semantic".
+	testIdPrefix: string;
+}) {
+	return (
+		<div role="radiogroup" aria-label={ariaLabel} className="grid gap-3 sm:grid-cols-2">
+			{options.map((option) => {
+				const selected = option.value === value;
+				return (
+					<button
+						key={option.value}
+						type="button"
+						role="radio"
+						aria-checked={selected}
+						onClick={() => onChange(option.value)}
+						data-testid={`${testIdPrefix}-${option.value}`}
+						className={cn(
+							"hover:bg-accent/50 flex h-full flex-col gap-2 rounded-md border p-4 text-left transition-colors",
+							selected && "border-primary bg-primary/5",
+						)}
+					>
+						<div className="flex w-full items-center gap-2">
+							{option.icon}
+							<span className="text-sm font-medium">{option.title}</span>
+							{selected && <Check className="ml-auto size-4 text-green-600" />}
+						</div>
+						<p className="text-muted-foreground text-xs leading-relaxed">{option.description}</p>
+					</button>
+				);
+			})}
 		</div>
 	);
 }

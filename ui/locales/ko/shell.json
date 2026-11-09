@@ -18,7 +18,7 @@
 		"modelProviders": "모델 공급자",
 		"budgetsLimits": "예산 및 한도",
 		"routingRules": "라우팅 규칙",
-		"complexityRouter": "복잡도 라우터",
+		"modelRouter": "모델 라우터",
 		"circuitBreaker": "서킷 브레이커",
 		"pricingOverrides": "가격 재정의",
 		"modelSettings": "모델 설정",

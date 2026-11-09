@@ -66,6 +66,20 @@ LogEntry:
     routing_rule_name:
       type: string
       nullable: true
+    model_router_id:
+      type: string
+      nullable: true
+      description: The model router whose tier routed the request; null when no model router classified it.
+    model_router_name:
+      type: string
+      nullable: true
+    model_routing_rule_id:
+      type: string
+      nullable: true
+      description: The model routing rule that sent the request to its model router; null when none matched.
+    model_routing_rule_name:
+      type: string
+      nullable: true
     complexity_tier:
       type: string
       enum: ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]

@@ -56,6 +56,32 @@ function StateIcon({ state }: { state: ClassifierState }) {
 	}
 }
 
+// ClassifierStateChip is the badge's chip alone, for the routers list, which
+// shows one per router. A router without a semantic or decision setup is not
+// configured; without a status yet it is still being checked.
+export function ClassifierStateChip({
+	status,
+	isNotConfigured,
+	routerId,
+}: {
+	status: SemanticStatusInfo | undefined;
+	isNotConfigured: boolean;
+	routerId: string;
+}) {
+	const { t: tcpx } = useTranslation("models", { keyPrefix: "routing.complexityUi" });
+	const state: ClassifierState = isNotConfigured ? "not-configured" : status ? status.state : "loading";
+	return (
+		<span
+			data-testid={`model-router-status-${routerId}`}
+			data-state-value={state}
+			className={cn(badgeVariants({ variant: TONES[state] }), "gap-1.5")}
+		>
+			<StateIcon state={state} />
+			<span>{tcpx(LABEL_KEYS[state])}</span>
+		</span>
+	);
+}
+
 // ClassifierStatusBadge surfaces warmup readiness, which is otherwise only
 // visible in server logs. Without it a failed warmup looks identical to a
 // working deployment, because complexity routing simply stops matching. It is
@@ -158,11 +184,7 @@ export function ClassifierStatusBadge({
 				)}
 
 				{state === "failed" && status && (
-					<p
-						className={
-							status.serving_previous || semanticFallback !== "none" ? "text-amber-700 dark:text-amber-400" : "text-destructive"
-						}
-					>
+					<p className={status.serving_previous || semanticFallback !== "none" ? "text-amber-700 dark:text-amber-400" : "text-destructive"}>
 						{semanticWarmupImpactMessage(status, semanticFallback)}
 					</p>
 				)}

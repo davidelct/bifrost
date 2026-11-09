@@ -173,6 +173,19 @@ export interface AnalyzerConfig {
 	suggestions?: SuggestionsConfig;
 }
 
+// A named model router: its identity plus the same configuration the single
+// complexity router has always had. The default router always exists.
+export interface ModelRouter extends AnalyzerConfig {
+	id: string;
+	name: string;
+	description?: string;
+}
+
+export interface ModelRouterList {
+	routers: ModelRouter[];
+	count: number;
+}
+
 export type KeywordListKey = keyof EditableKeywordConfig;
 
 export const COMPLEXITY_TIER_VALUES = ["SIMPLE", "MEDIUM", "COMPLEX"] as const;
@@ -517,7 +530,8 @@ export const MAX_SUGGESTION_INSTRUCTIONS_CHARACTERS = 8000;
 export const DEFAULT_SUGGESTION_EVERY = "1d";
 export const DEFAULT_SUGGESTION_AT = "03:00";
 
-// The router suggestions belong to until a gateway can define several.
+// The default model router's id. It always exists, and routing rules that use
+// complexity_tier classify with it.
 export const DEFAULT_COMPLEXITY_ROUTER_ID = "default";
 
 // Run windows offered for "Run now"; the ones longer than the lookback are

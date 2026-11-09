@@ -70,7 +70,9 @@
 			"decision": "Модель принятия решений",
 			"llm": "LLM",
 			"skipped": "Пропущено"
-		}
+		},
+		"modelRouter": "Маршрутизатор моделей",
+		"modelRoutingRule": "Правило маршрутизации моделей"
 	},
 	"dashboard": {
 		"tabs": {
@@ -1283,7 +1285,10 @@
 		"exactRoundTripID": "Точный ID цикла запросов",
 		"nothingRecorded": "За этот период ничего не записано",
 		"topics": "Темы",
-		"searchTopics": "Поиск тем"
+		"searchTopics": "Поиск тем",
+		"modelRouters": "Маршрутизаторы моделей",
+		"searchModelRouters": "Поиск маршрутизаторов",
+		"modelRoutingRules": "Правила маршрутизации моделей"
 	},
 	"requestTypes": {
 		"chat_completion": "Чат",

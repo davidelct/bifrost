@@ -1094,6 +1094,14 @@ false
 {{- end }}
 {{- $_ := set $config "relays" (default (list) .Values.bifrost.relays) }}
 {{- end }}
+{{- /* Model routers and model routing rules, rendered as declared. Like governance.routingRules, an
+       empty list renders nothing, so installs that do not set them keep their stored state. */ -}}
+{{- if .Values.bifrost.modelRouters }}
+{{- $_ := set $config "model_routers" .Values.bifrost.modelRouters }}
+{{- end }}
+{{- if .Values.bifrost.modelRoutingRules }}
+{{- $_ := set $config "model_routing_rules" .Values.bifrost.modelRoutingRules }}
+{{- end }}
 {{- /* Config Store */ -}}
 {{- if .Values.storage.configStore.enabled }}
 {{- $configStoreType := .Values.storage.configStore.type | default .Values.storage.mode }}

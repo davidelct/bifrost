@@ -70,7 +70,9 @@
 			"decision": "决策模型",
 			"llm": "LLM",
 			"skipped": "已跳过"
-		}
+		},
+		"modelRouter": "模型路由器",
+		"modelRoutingRule": "模型路由规则"
 	},
 	"dashboard": {
 		"tabs": {
@@ -1228,7 +1230,10 @@
 		"exactRoundTripID": "精确往返 ID",
 		"nothingRecorded": "此时间范围内没有记录",
 		"topics": "主题",
-		"searchTopics": "搜索主题"
+		"searchTopics": "搜索主题",
+		"modelRouters": "模型路由器",
+		"searchModelRouters": "搜索路由器",
+		"modelRoutingRules": "模型路由规则"
 	},
 	"requestTypes": {
 		"chat_completion": "对话",

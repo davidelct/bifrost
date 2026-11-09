@@ -22,11 +22,13 @@ import {
 	COMPLEXITY_TIER_VALUES,
 	LEGACY_COMPLEXITY_TIER_VALUES,
 } from "@/lib/types/complexityRouter";
+import { useGetModelRoutersQuery, useGetModelRoutingRulesQuery } from "@/lib/store/apis/governanceApi";
 import type { LogFilters } from "@/lib/types/logs";
 import { cn } from "@/lib/utils";
 import { metadataFilterValueCount, normalizeMetadataFilters, toggleMetadataFilterValue } from "@/lib/utils/metadataFilters";
 import { getRangeForPeriod } from "@/lib/utils/timeRange";
 import "@enterprise/lib/registrations/logs";
+import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { ChevronDown, LoaderCircle, PanelLeftClose, Plus, RotateCcw, Search } from "lucide-react";
 import { Ref, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -129,6 +131,8 @@ export function LogsFilterSidebar({ filters, onFiltersChange }: LogsSidebarProps
 					<AliasesFilter filters={filters} onFiltersChange={onFiltersChange} />
 					<RoutingEnginesFilter filters={filters} onFiltersChange={onFiltersChange} />
 					<RoutingRulesFilter filters={filters} onFiltersChange={onFiltersChange} />
+					<ConfiguredEntityFilter field="model_router_ids" filters={filters} onFiltersChange={onFiltersChange} />
+					<ConfiguredEntityFilter field="model_routing_rule_ids" filters={filters} onFiltersChange={onFiltersChange} />
 					{getMetadataFilterGroups().map((group) => (
 						<LabelledMetadataFilter key={group.title} group={group} filters={filters} onFiltersChange={onFiltersChange} />
 					))}
@@ -958,6 +962,66 @@ function RoutingRulesFilter({ filters, onFiltersChange, defaultOpen }: FilterCom
 				onSearch={setSearchQuery}
 				fetching={isFetching}
 				testIdPrefix="routing-rules-filter"
+			/>
+		</FilterSection>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// ConfiguredEntityFilter – model routers and model routing rules, listed from
+// the gateway's configuration, whose APIs are gated on Governance, so both are
+// hidden without it.
+// ---------------------------------------------------------------------------
+
+const CONFIGURED_ENTITY_FILTERS = {
+	model_router_ids: { title: "filters.modelRouters", placeholder: "filters.searchModelRouters", testIdPrefix: "model-routers-filter" },
+	model_routing_rule_ids: {
+		title: "filters.modelRoutingRules",
+		placeholder: "filters.searchRules",
+		testIdPrefix: "model-routing-rules-filter",
+	},
+} as const;
+
+// ConfiguredEntityFilter filters on entities read from the gateway's own
+// configuration, by id, listed by name: the model routers or the model routing
+// rules. Only the field's own list is fetched.
+function ConfiguredEntityFilter({
+	filters,
+	onFiltersChange,
+	defaultOpen,
+	field,
+}: FilterComponentProps & { field: keyof typeof CONFIGURED_ENTITY_FILTERS }) {
+	const { t } = useTranslation("observability");
+	const canView = useRbac(RbacResource.Governance, RbacOperation.View);
+	const selected = filters[field] || [];
+	const [opened, setOpened] = useState(defaultOpen || selected.length > 0);
+	const searchInputRef = useAutoFocusOnOpen(opened);
+	const skip = !canView || (!opened && selected.length === 0);
+	const routers = useGetModelRoutersQuery(undefined, { skip: skip || field !== "model_router_ids" });
+	const rules = useGetModelRoutingRulesQuery(undefined, { skip: skip || field !== "model_routing_rule_ids" });
+	if (!canView) return null;
+	const { title, placeholder, testIdPrefix } = CONFIGURED_ENTITY_FILTERS[field];
+	const items =
+		field === "model_router_ids"
+			? (routers.data?.routers ?? []).map((router) => ({ key: router.id, label: router.name }))
+			: (rules.data?.rules ?? []).map((rule) => ({ key: rule.id, label: rule.name }));
+	const toggle = (id: string) =>
+		onFiltersChange({ ...filters, [field]: selected.includes(id) ? selected.filter((v) => v !== id) : [...selected, id] });
+	return (
+		<FilterSection
+			title={t(title)}
+			defaultOpen={defaultOpen || selected.length > 0}
+			loading={routers.isLoading || rules.isLoading}
+			onOpenChange={setOpened}
+			testId={`${testIdPrefix}-toggle`}
+		>
+			<SearchableCheckboxList
+				inputRef={searchInputRef}
+				placeholder={t(placeholder)}
+				items={items}
+				isSelected={(id) => selected.includes(id)}
+				onToggle={toggle}
+				testIdPrefix={testIdPrefix}
 			/>
 		</FilterSection>
 	);

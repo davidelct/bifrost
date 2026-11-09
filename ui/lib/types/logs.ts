@@ -802,6 +802,10 @@ export interface LogEntry {
 	routing_engines_used?: string[];
 	routing_rule_id?: string;
 	routing_rule_name?: string;
+	model_router_id?: string; // The model router whose tier routed the request
+	model_router_name?: string;
+	model_routing_rule_id?: string; // The model routing rule that sent the request to that router
+	model_routing_rule_name?: string;
 	complexity_tier?: string; // Complexity tier used for routing ("SIMPLE", "MEDIUM", "COMPLEX"); absent when no routing rule referenced complexity_tier
 	complexity_mechanism?: string; // How the complexity tier was classified ("semantic", "decision", "llm", "session", "skipped"); absent when no routing rule referenced complexity_tier
 	complexity_score?: number; // Classifier score: the semantic classifier's similarity to the nearest reference phrase
@@ -914,6 +918,8 @@ export interface LogFilters {
 	selected_key_ids?: string[];
 	virtual_key_ids?: string[];
 	routing_rule_ids?: string[];
+	model_router_ids?: string[]; // Requests a model router classified
+	model_routing_rule_ids?: string[]; // Requests a model routing rule matched
 	routing_engine_used?: string[]; // For filtering by routing engine (routing-rule, governance, loadbalancing)
 	status?: string[];
 	stop_reasons?: string[]; // For filtering by stop reason (stop, length, content_filter, refusal, tool_calls, etc.)

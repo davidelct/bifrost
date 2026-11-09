@@ -1,16 +1,11 @@
-import { NoPermissionView } from "@/components/noPermissionView";
-import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
-import { createFileRoute } from "@tanstack/react-router";
-import ComplexityRouterPage from "./page";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
-function RouteComponent() {
-	const hasRoutingRulesAccess = useRbac(RbacResource.RoutingRules, RbacOperation.View);
-	if (!hasRoutingRulesAccess) {
-		return <NoPermissionView entity="complexity router" />;
-	}
-	return <ComplexityRouterPage />;
-}
-
+// The complexity router is now the default model router. Links to its old
+// page open that router, keeping the tab they asked for.
 export const Route = createFileRoute("/workspace/complexity-router")({
-	component: RouteComponent,
+	beforeLoad: ({ location }) => {
+		const tab = new URLSearchParams(location.searchStr).get("tab");
+		const search = new URLSearchParams({ router: "default", ...(tab ? { tab } : {}) });
+		throw redirect({ href: `/workspace/model-routers?${search.toString()}`, replace: true });
+	},
 });
