@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -389,6 +390,99 @@ func TestGetInjectedTool(t *testing.T) {
 type fakeCodeMode struct{ CodeMode }
 
 func (fakeCodeMode) IsCodeModeTool(toolName string) bool { return toolName == "executeToolCode" }
+
+func (fakeCodeMode) GetTools() []schemas.ChatTool {
+	return []schemas.ChatTool{{Type: "function", Function: &schemas.ChatToolFunction{Name: "executeToolCode"}}}
+}
+
+// onClientSlug is a request on name's /mcp/<slug>, as admitBySlug stamps it.
+func onClientSlug(name string) *schemas.BifrostContext {
+	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	ctx.SetValue(schemas.MCPContextKeyIncludeTools, []string{name + "-*"})
+	ctx.SetValue(schemas.BifrostContextKeyMCPGatewayClient, name)
+	return ctx
+}
+
+// setSlugCodeMode sets name's slug_code_mode override.
+func setSlugCodeMode(m *MCPManager, name string, mode *bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.clientMap[name+"-id"].ExecutionConfig.SlugCodeMode = mode
+}
+
+// listedToolNames is what GetAvailableTools lists on ctx, sorted.
+func listedToolNames(m *MCPManager, ctx *schemas.BifrostContext) []string {
+	names := []string{}
+	for _, tool := range m.GetAvailableTools(ctx) {
+		names = append(names, tool.Function.Name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+// The slug override decides the listing only on the client's own /mcp/<slug>; the gateway's install
+// lists what either endpoint may serve.
+func TestGetAvailableTools_FollowsSlugCodeMode(t *testing.T) {
+	plain := func() *schemas.BifrostContext {
+		return schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	}
+	install := func() *schemas.BifrostContext {
+		return schemas.NewBifrostContext(WithGatewayTools(context.Background()), schemas.NoDeadline)
+	}
+
+	t.Run("code mode client with slug disabled", func(t *testing.T) {
+		m := newManagerWithInstructions(t)
+		addCodeModeClient(t, m, "codey")
+		m.toolsManager.SetCodeMode(fakeCodeMode{})
+		setSlugCodeMode(m, "codey", schemas.Ptr(false))
+
+		assert.Equal(t, []string{"alpha-echo", "beta-echo", "executeToolCode"}, listedToolNames(m, plain()))
+		assert.Equal(t, []string{"codey-run"}, listedToolNames(m, onClientSlug("codey")))
+		assert.Equal(t, []string{"alpha-echo"}, listedToolNames(m, onClientSlug("alpha")))
+		assert.Equal(t, []string{"alpha-echo", "beta-echo", "codey-run", "executeToolCode"}, listedToolNames(m, install()))
+	})
+
+	t.Run("direct client with slug enabled", func(t *testing.T) {
+		m := newManagerWithInstructions(t)
+		m.toolsManager.SetCodeMode(fakeCodeMode{})
+		setSlugCodeMode(m, "alpha", schemas.Ptr(true))
+
+		assert.Equal(t, []string{"alpha-echo", "beta-echo"}, listedToolNames(m, plain()))
+		assert.Equal(t, []string{"executeToolCode"}, listedToolNames(m, onClientSlug("alpha")))
+		assert.Equal(t, []string{"beta-echo"}, listedToolNames(m, onClientSlug("beta")))
+		assert.Equal(t, []string{"alpha-echo", "beta-echo", "executeToolCode"}, listedToolNames(m, install()))
+	})
+
+	t.Run("inherit keeps code mode on the slug", func(t *testing.T) {
+		m := newManagerWithInstructions(t)
+		addCodeModeClient(t, m, "codey")
+		m.toolsManager.SetCodeMode(fakeCodeMode{})
+
+		assert.Equal(t, []string{"executeToolCode"}, listedToolNames(m, onClientSlug("codey")))
+		assert.Equal(t, []string{"alpha-echo", "beta-echo", "executeToolCode"}, listedToolNames(m, install()))
+	})
+}
+
+// executeToolCode is callable on a client's slug exactly when that slug lists it.
+func TestPrepareToolExecution_CodeModeToolFollowsSlugCodeMode(t *testing.T) {
+	m := newManagerWithInstructions(t)
+	addCodeModeClient(t, m, "codey")
+	m.toolsManager.SetCodeMode(fakeCodeMode{})
+	name := "executeToolCode"
+	request := &schemas.BifrostMCPRequest{
+		RequestType:                  schemas.MCPRequestTypeChatToolCall,
+		ChatAssistantMessageToolCall: &schemas.ChatAssistantMessageToolCall{Function: schemas.ChatAssistantMessageToolCallFunction{Name: &name}},
+	}
+
+	setSlugCodeMode(m, "codey", schemas.Ptr(false))
+	_, _, _, err := m.prepareToolExecution(onClientSlug("codey"), request)
+	assert.ErrorContains(t, err, "not permitted", "slug disabled: the code-mode tools are not served there")
+
+	setSlugCodeMode(m, "alpha", schemas.Ptr(true))
+	_, _, release, err := m.prepareToolExecution(onClientSlug("alpha"), request)
+	require.NoError(t, err, "slug enabled: the code-mode tools are served there")
+	release()
+}
 
 // A code-mode tool is listed only when the request can reach a code-mode client, so calling it
 // by name must be refused under the same rule.

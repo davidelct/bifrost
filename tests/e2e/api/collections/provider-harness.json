@@ -314377,6 +314377,2617 @@
           }
         }
       ]
+    },
+    {
+      "name": "325. Slug code mode override on the MCP gateway (slug-code-mode) [SERIAL]",
+      "description": "slug_code_mode overrides is_code_mode_client for one MCP client on its own /mcp/<slug> only; /mcp, Virtual MCP slugs and requests outside the gateway keep following is_code_mode_client. Before this, the gateway installed each client's tools once from the /mcp point of view, so a code-mode client's own tools never existed on its slug and the override had nothing to show.\n\nClient A is code mode with its slug set to direct tools; client B is direct with its slug set to code mode. The cases pin, on every surface: the initialize instructions, tools/list, direct tools/call by full and server-given name, the code-mode tools and what a script can bind, a Virtual MCP that bundles both, the management API (stored values, refused values, PATCH keeping and clearing the field) and that clearing the override is live. A tool hidden from an endpoint answers exactly as an unknown tool does: HTTP 200 with JSON-RPC error -32602.\n\nSerial, and it provisions its own clients, Virtual MCP and virtual key: a code-mode client makes the four code-mode tools visible to every MCP-bearing request while it exists. Both clients point at the SSE fixture (examples/mcps/remote-test-server) that sse_mcp uses, which also advertises instructions on its handshake.",
+      "item": [
+        {
+          "name": "[EXPECT-200] openai slug-code-mode provision client A: code mode on /mcp, direct tools on its own slug",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Per-run names: two runs against one gateway must not contend, and the sweep at the end keys off",
+                  "// the shared prefix to reap anything an interrupted run left behind.",
+                  "var stamp = Date.now();",
+                  "pm.collectionVariables.set('slugCodeModeClientA', 'harness_slugcm_' + stamp);",
+                  "pm.collectionVariables.set('slugCodeModeClientB', 'harness_slugcm_' + stamp + '_b');",
+                  "pm.collectionVariables.set('slugCodeModeClientBad', 'harness_slugcm_' + stamp + '_bad');",
+                  "pm.collectionVariables.set('slugCodeModeIdA', 'harness-slugcm-' + stamp + '-a');",
+                  "pm.collectionVariables.set('slugCodeModeIdB', 'harness-slugcm-' + stamp + '-b');",
+                  "pm.collectionVariables.set('slugCodeModeSlugA', 'harness-slugcm-' + stamp);",
+                  "pm.collectionVariables.set('slugCodeModeSlugB', 'harness-slugcm-' + stamp + '-b');",
+                  "pm.collectionVariables.set('slugCodeModeSlugVmcp', 'harness-slugcm-' + stamp + '-vmcp');",
+                  "pm.collectionVariables.set('slugCodeModeVmcpName', 'harness_slugcm_vmcp_' + stamp);",
+                  "pm.collectionVariables.set('slugCodeModeVkName', 'harness-slugcm-vk-' + stamp);",
+                  "pm.collectionVariables.set('slugCodeModeQueue', '[]');",
+                  "pm.collectionVariables.set('slugCodeModeSweeps', '0');",
+                  "pm.collectionVariables.set('slugCodeModeVmcpId', 'none-created');",
+                  "pm.collectionVariables.set('slugCodeModeVkId', 'none-created');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('client A registers against the SSE fixture', function () {",
+                  "  pm.expect(pm.response.code, 'create failed: ' + pm.response.text()).to.be.oneOf([200, 201]);",
+                  "  pm.expect(pm.response.json().status, 'unexpected create status: ' + pm.response.text()).to.eql('success');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/mcp/client",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "mcp",
+                "client"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"client_id\": \"{{slugCodeModeIdA}}\",\n  \"name\": \"{{slugCodeModeClientA}}\",\n  \"endpoint_slug\": \"{{slugCodeModeSlugA}}\",\n  \"connection_type\": \"sse\",\n  \"connection_string\": \"http://localhost:3012/sse\",\n  \"auth_type\": \"none\",\n  \"is_code_mode_client\": true,\n  \"slug_code_mode\": \"disabled\",\n  \"tools_to_execute\": [\n    \"echo\"\n  ],\n  \"tools_to_auto_execute\": [\n    \"echo\"\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode provision client B: direct tools on /mcp, code mode on its own slug",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('client B registers against the SSE fixture', function () {",
+                  "  pm.expect(pm.response.code, 'create failed: ' + pm.response.text()).to.be.oneOf([200, 201]);",
+                  "  pm.expect(pm.response.json().status, 'unexpected create status: ' + pm.response.text()).to.eql('success');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/mcp/client",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "mcp",
+                "client"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"client_id\": \"{{slugCodeModeIdB}}\",\n  \"name\": \"{{slugCodeModeClientB}}\",\n  \"endpoint_slug\": \"{{slugCodeModeSlugB}}\",\n  \"connection_type\": \"sse\",\n  \"connection_string\": \"http://localhost:3012/sse\",\n  \"auth_type\": \"none\",\n  \"is_code_mode_client\": false,\n  \"slug_code_mode\": \"enabled\",\n  \"tools_to_execute\": [\n    \"echo\"\n  ],\n  \"tools_to_auto_execute\": [\n    \"echo\"\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "[EXPECT-400] openai slug-code-mode creating a client with an unknown slug_code_mode is refused",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('only inherit, enabled and disabled are accepted', function () {",
+                  "  pm.expect(pm.response.code, 'expected 400: ' + pm.response.text()).to.equal(400);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/mcp/client",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "mcp",
+                "client"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{slugCodeModeClientBad}}\",\n  \"connection_type\": \"sse\",\n  \"connection_string\": \"http://localhost:3012/sse\",\n  \"auth_type\": \"none\",\n  \"slug_code_mode\": \"on\",\n  \"tools_to_execute\": [\n    \"echo\"\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode both overrides read back from the clients list",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('the list returns each override as its wire value', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var modes = {};",
+                  "  (pm.response.json().clients || []).forEach(function (c) { if (c.config) { modes[c.config.name] = c.config.slug_code_mode; } });",
+                  "  pm.expect(modes[A], 'client A: ' + pm.response.text()).to.equal('disabled');",
+                  "  pm.expect(modes[B], 'client B: ' + pm.response.text()).to.equal('enabled');",
+                  "  // A client that never set the field reads back as the default, so the field is always present.",
+                  "  if (modes.sse_mcp !== undefined) { pm.expect(modes.sse_mcp, 'profile client sse_mcp: ' + pm.response.text()).to.equal('inherit'); }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/mcp/clients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "mcp",
+                "clients"
+              ]
+            }
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode initialize on /mcp aggregates client B but not code-mode client A",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('/mcp forwards the instructions of directly served clients only', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var instructions = (rpc(pm.response).result || {}).instructions || '';",
+                  "  pm.expect(instructions, 'client B is direct on /mcp, so its instructions belong here: ' + instructions).to.include('<mcp_server name=\"' + B + '\">');",
+                  "  pm.expect(instructions, 'client A is code mode on /mcp, so its instructions ride in its stub: ' + instructions).to.not.include('<mcp_server name=\"' + A + '\">');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"harness\",\"version\":\"1\"}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp"
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode tools/list on /mcp follows is_code_mode_client",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('/mcp lists the code-mode tools and client B, not client A\\'s own tools', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var names = listed(pm.response);",
+                  "  pm.expect(names, 'code-mode tools missing on /mcp: ' + pm.response.text()).to.include('executeToolCode');",
+                  "  pm.expect(names, 'client B missing on /mcp: ' + pm.response.text()).to.include(B + '-echo');",
+                  "  pm.expect(names, 'client A\\'s own tool leaked onto /mcp: ' + pm.response.text()).to.not.include(A + '-echo');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp"
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode client A's tool is unknown on /mcp",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('a direct call to client A\\'s tool on /mcp answers as an unknown tool', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var body = rpc(pm.response);",
+                  "  pm.expect(body.error && body.error.code, 'expected JSON-RPC -32602: ' + pm.response.text()).to.equal(-32602);",
+                  "  pm.expect(body.error.message, 'expected a not-found error: ' + pm.response.text()).to.include('not found');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"{{slugCodeModeClientA}}-echo\",\"arguments\":{\"message\":\"harness-slug-code-mode\"}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp"
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode a bare tool name on /mcp never resolves to client A's hidden tool",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('the server-given name resolves among the tools /mcp serves, never client A\\'s', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var body = rpc(pm.response);",
+                  "  // sse_mcp and client B both serve echo here, so the name is ambiguous; client A must not be offered.",
+                  "  pm.expect(body.result && body.result.isError, 'expected an ambiguity refusal: ' + pm.response.text()).to.equal(true);",
+                  "  pm.expect(resultText(body), 'client B should be offered: ' + pm.response.text()).to.include(B + '-echo');",
+                  "  pm.expect(resultText(body), 'client A\\'s hidden tool was offered: ' + pm.response.text()).to.not.include(A + '-echo');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"echo\",\"arguments\":{\"message\":\"harness-slug-code-mode\"}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp"
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode a script on /mcp can call client A",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('client A runs in code mode on /mcp, so its tools are bound in the sandbox', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var body = rpc(pm.response);",
+                  "  pm.expect(body.error, 'call was refused: ' + pm.response.text()).to.be.undefined;",
+                  "  pm.expect(body.result && body.result.isError, 'tool errored: ' + pm.response.text()).to.not.equal(true);",
+                  "  pm.expect(resultText(body), 'echo did not come back: ' + pm.response.text()).to.include('harness-slug-code-mode');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"executeToolCode\",\"arguments\":{\"code\":\"result = {{slugCodeModeClientA}}.echo(message=\\\"harness-slug-code-mode\\\")\"}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp"
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode a script on /mcp cannot call client B",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('client B is direct on /mcp, so the sandbox has no binding for it', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var body = rpc(pm.response);",
+                  "  pm.expect(body.result && body.result.isError, 'the script ran against client B: ' + pm.response.text()).to.equal(true);",
+                  "  pm.expect(resultText(body), 'expected an undefined-name error for client B: ' + pm.response.text()).to.include('undefined: ' + B);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"executeToolCode\",\"arguments\":{\"code\":\"result = {{slugCodeModeClientB}}.echo(message=\\\"harness-slug-code-mode\\\")\"}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp"
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode initialize on client A's slug forwards its instructions",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('client A is direct on its own slug, so its instructions are forwarded there', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var instructions = (rpc(pm.response).result || {}).instructions || '';",
+                  "  pm.expect(instructions, 'missing client A\\'s instructions: ' + pm.response.text()).to.include('<mcp_server name=\"' + A + '\">');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"harness\",\"version\":\"1\"}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp/{{slugCodeModeSlugA}}"
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode client A's slug serves its tools directly",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('slug_code_mode disabled lists client A\\'s own tools and no code-mode tools', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var names = listed(pm.response);",
+                  "  pm.expect(names, 'own tool missing on the slug: ' + pm.response.text()).to.include(A + '-echo');",
+                  "  pm.expect(names, 'code-mode tools served on a slug that disabled code mode: ' + pm.response.text()).to.not.include('executeToolCode');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp/{{slugCodeModeSlugA}}"
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode client A's tool runs on its slug",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('the slug that disabled code mode runs client A\\'s tool directly', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var body = rpc(pm.response);",
+                  "  pm.expect(body.error, 'call was refused: ' + pm.response.text()).to.be.undefined;",
+                  "  pm.expect(body.result && body.result.isError, 'tool errored: ' + pm.response.text()).to.not.equal(true);",
+                  "  pm.expect(resultText(body), 'echo did not come back: ' + pm.response.text()).to.include('harness-slug-code-mode');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"{{slugCodeModeClientA}}-echo\",\"arguments\":{\"message\":\"harness-slug-code-mode\"}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp/{{slugCodeModeSlugA}}"
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode client A's tool runs on its slug by its server-given name",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('on a single-server slug the bare name resolves to that server\\'s tool', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var body = rpc(pm.response);",
+                  "  pm.expect(body.error, 'call was refused: ' + pm.response.text()).to.be.undefined;",
+                  "  pm.expect(body.result && body.result.isError, 'tool errored: ' + pm.response.text()).to.not.equal(true);",
+                  "  pm.expect(resultText(body), 'echo did not come back: ' + pm.response.text()).to.include('harness-slug-code-mode');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"echo\",\"arguments\":{\"message\":\"harness-slug-code-mode\"}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp/{{slugCodeModeSlugA}}"
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode executeToolCode is refused on client A's slug",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('no client runs in code mode on this slug, so the code-mode tools are refused', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var body = rpc(pm.response);",
+                  "  pm.expect(body.result && body.result.isError, 'executeToolCode ran on a slug that disabled code mode: ' + pm.response.text()).to.equal(true);",
+                  "  pm.expect(resultText(body), 'expected a not-permitted refusal: ' + pm.response.text()).to.include('not permitted');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"executeToolCode\",\"arguments\":{\"code\":\"result = 1\"}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp/{{slugCodeModeSlugA}}"
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode initialize on client B's slug leaves its instructions to the stub",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('client B runs in code mode on its own slug, so its instructions are not forwarded there', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var instructions = (rpc(pm.response).result || {}).instructions || '';",
+                  "  pm.expect(instructions, 'client B\\'s instructions were forwarded on its code-mode slug: ' + instructions).to.not.include('<mcp_server name=\"' + B + '\">');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"harness\",\"version\":\"1\"}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp/{{slugCodeModeSlugB}}"
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode client B's slug serves code mode",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('slug_code_mode enabled lists the code-mode tools instead of client B\\'s own', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var names = listed(pm.response);",
+                  "  ['listToolFiles', 'readToolFile', 'getToolDocs', 'executeToolCode'].forEach(function (tool) {",
+                  "    pm.expect(names, tool + ' missing on a slug that enabled code mode: ' + pm.response.text()).to.include(tool);",
+                  "  });",
+                  "  pm.expect(names, 'own tool listed directly on a code-mode slug: ' + pm.response.text()).to.not.include(B + '-echo');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp/{{slugCodeModeSlugB}}"
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode client B's tool is unknown on its code-mode slug",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('a direct call on a slug that enabled code mode answers as an unknown tool', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var body = rpc(pm.response);",
+                  "  pm.expect(body.error && body.error.code, 'expected JSON-RPC -32602: ' + pm.response.text()).to.equal(-32602);",
+                  "  pm.expect(body.error.message, 'expected a not-found error: ' + pm.response.text()).to.include('not found');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"{{slugCodeModeClientB}}-echo\",\"arguments\":{\"message\":\"harness-slug-code-mode\"}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp/{{slugCodeModeSlugB}}"
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode listToolFiles on client B's slug lists client B",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('client B runs in code mode on its own slug, so its stub is listed', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var body = rpc(pm.response);",
+                  "  pm.expect(body.result && body.result.isError, 'listToolFiles errored: ' + pm.response.text()).to.not.equal(true);",
+                  "  pm.expect(resultText(body), 'client B missing from the listing: ' + pm.response.text()).to.include(B);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"listToolFiles\",\"arguments\":{}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp/{{slugCodeModeSlugB}}"
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode a script on client B's slug can call client B",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('client B runs in code mode on its own slug, so its tools are bound in the sandbox', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var body = rpc(pm.response);",
+                  "  pm.expect(body.error, 'call was refused: ' + pm.response.text()).to.be.undefined;",
+                  "  pm.expect(body.result && body.result.isError, 'tool errored: ' + pm.response.text()).to.not.equal(true);",
+                  "  pm.expect(resultText(body), 'echo did not come back: ' + pm.response.text()).to.include('harness-slug-code-mode');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"executeToolCode\",\"arguments\":{\"code\":\"result = {{slugCodeModeClientB}}.echo(message=\\\"harness-slug-code-mode\\\")\"}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp/{{slugCodeModeSlugB}}"
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode tool execution outside the gateway follows is_code_mode_client",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('the listing names client A, which is code mode, and not client B, whose override applies only on its slug', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  pm.expect(pm.response.json().is_error, 'listToolFiles errored: ' + pm.response.text()).to.not.equal(true);",
+                  "  pm.expect(pm.response.text(), 'client A missing from the listing: ' + pm.response.text()).to.include(A);",
+                  "  pm.expect(pm.response.text(), 'client B listed outside its slug: ' + pm.response.text()).to.not.include(B);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/mcp/tool/execute",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "mcp",
+                "tool",
+                "execute"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"slug-code-mode\",\n  \"type\": \"function\",\n  \"function\": {\n    \"name\": \"listToolFiles\",\n    \"arguments\": \"{}\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode create a virtual key for the Virtual MCP",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('virtual key created', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var vk = pm.response.json().virtual_key || {};",
+                  "  pm.expect(vk.id, 'no id: ' + pm.response.text()).to.be.a('string').and.not.equal('');",
+                  "  pm.expect(vk.value, 'no value: ' + pm.response.text()).to.be.a('string').and.not.equal('');",
+                  "  pm.collectionVariables.set('slugCodeModeVkId', vk.id);",
+                  "  pm.collectionVariables.set('slugCodeModeVkValue', vk.value);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/governance/virtual-keys",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "governance",
+                "virtual-keys"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{slugCodeModeVkName}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "[EXPECT-201] openai slug-code-mode create a Virtual MCP bundling clients A and B",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('Virtual MCP created', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(201);",
+                  "  var vmcp = pm.response.json().virtual_mcp || {};",
+                  "  pm.expect(vmcp.id, 'no id: ' + pm.response.text()).to.not.equal(undefined);",
+                  "  pm.collectionVariables.set('slugCodeModeVmcpId', String(vmcp.id));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/mcp/virtual-mcps",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "mcp",
+                "virtual-mcps"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{slugCodeModeVmcpName}}\",\n  \"endpoint_slug\": \"{{slugCodeModeSlugVmcp}}\",\n  \"tools\": [\n    {\n      \"mcp_client_id\": \"{{slugCodeModeIdA}}\",\n      \"tool_names\": [\n        \"echo\"\n      ]\n    },\n    {\n      \"mcp_client_id\": \"{{slugCodeModeIdB}}\",\n      \"tool_names\": [\n        \"echo\"\n      ]\n    }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode attach the Virtual MCP to the virtual key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('Virtual MCP attached', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/mcp/virtual-mcps/{{slugCodeModeVmcpId}}/virtual-keys/{{slugCodeModeVkId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "mcp",
+                "virtual-mcps",
+                "{{slugCodeModeVmcpId}}",
+                "virtual-keys",
+                "{{slugCodeModeVkId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode tools/list on the Virtual MCP slug follows is_code_mode_client",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('a Virtual MCP ignores both slug overrides: code mode for A, client B directly', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var names = listed(pm.response);",
+                  "  pm.expect(names, 'code-mode tools missing for client A: ' + pm.response.text()).to.include('executeToolCode');",
+                  "  pm.expect(names, 'client B missing: ' + pm.response.text()).to.include(B + '-echo');",
+                  "  pm.expect(names, 'client A\\'s slug override leaked into the Virtual MCP: ' + pm.response.text()).to.not.include(A + '-echo');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "x-bf-vk",
+                "value": "{{slugCodeModeVkValue}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp/{{slugCodeModeSlugVmcp}}"
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode client A's tool is unknown on the Virtual MCP slug",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('a direct call to client A\\'s tool on the Virtual MCP answers as an unknown tool', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var body = rpc(pm.response);",
+                  "  pm.expect(body.error && body.error.code, 'expected JSON-RPC -32602: ' + pm.response.text()).to.equal(-32602);",
+                  "  pm.expect(body.error.message, 'expected a not-found error: ' + pm.response.text()).to.include('not found');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "x-bf-vk",
+                "value": "{{slugCodeModeVkValue}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"{{slugCodeModeClientA}}-echo\",\"arguments\":{\"message\":\"harness-slug-code-mode\"}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp/{{slugCodeModeSlugVmcp}}"
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode client B's tool runs on the Virtual MCP slug",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('client B\\'s override applies only on its own slug, so the Virtual MCP serves it directly', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var body = rpc(pm.response);",
+                  "  pm.expect(body.error, 'call was refused: ' + pm.response.text()).to.be.undefined;",
+                  "  pm.expect(body.result && body.result.isError, 'tool errored: ' + pm.response.text()).to.not.equal(true);",
+                  "  pm.expect(resultText(body), 'echo did not come back: ' + pm.response.text()).to.include('harness-slug-code-mode');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "x-bf-vk",
+                "value": "{{slugCodeModeVkValue}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"{{slugCodeModeClientB}}-echo\",\"arguments\":{\"message\":\"harness-slug-code-mode\"}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp/{{slugCodeModeSlugVmcp}}"
+          }
+        },
+        {
+          "name": "[EXPECT-400] openai slug-code-mode updating to an unknown slug_code_mode is refused",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('the update names the field it refused', function () {",
+                  "  pm.expect(pm.response.code, 'expected 400: ' + pm.response.text()).to.equal(400);",
+                  "  pm.expect(pm.response.text(), 'expected the error to name slug_code_mode: ' + pm.response.text()).to.include('slug_code_mode');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/mcp/client/{{slugCodeModeIdA}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "mcp",
+                "client",
+                "{{slugCodeModeIdA}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slug_code_mode\": \"true\"\n}"
+            }
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode an update that omits slug_code_mode keeps it",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('an unrelated update succeeds', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/mcp/client/{{slugCodeModeIdA}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "mcp",
+                "client",
+                "{{slugCodeModeIdA}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tools_to_auto_execute\": [\n    \"echo\"\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode client A still has its override after the refused and the unrelated update",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('neither update changed the override', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var modes = {};",
+                  "  (pm.response.json().clients || []).forEach(function (c) { if (c.config) { modes[c.config.name] = c.config.slug_code_mode; } });",
+                  "  pm.expect(modes[A], 'client A: ' + pm.response.text()).to.equal('disabled');",
+                  "  pm.expect(modes[B], 'client B: ' + pm.response.text()).to.equal('enabled');",
+                  "  // A client that never set the field reads back as the default, so the field is always present.",
+                  "  if (modes.sse_mcp !== undefined) { pm.expect(modes.sse_mcp, 'profile client sse_mcp: ' + pm.response.text()).to.equal('inherit'); }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/mcp/clients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "mcp",
+                "clients"
+              ]
+            }
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode updating to inherit clears the override",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('inherit is accepted', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/mcp/client/{{slugCodeModeIdA}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "mcp",
+                "client",
+                "{{slugCodeModeIdA}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slug_code_mode\": \"inherit\"\n}"
+            }
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode client A reads back as inherit",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('the cleared override reads back as inherit', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var modes = {};",
+                  "  (pm.response.json().clients || []).forEach(function (c) { if (c.config) { modes[c.config.name] = c.config.slug_code_mode; } });",
+                  "  pm.expect(modes[A], 'client A: ' + pm.response.text()).to.equal('inherit');",
+                  "  pm.expect(modes[B], 'client B: ' + pm.response.text()).to.equal('enabled');",
+                  "  // A client that never set the field reads back as the default, so the field is always present.",
+                  "  if (modes.sse_mcp !== undefined) { pm.expect(modes.sse_mcp, 'profile client sse_mcp: ' + pm.response.text()).to.equal('inherit'); }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/mcp/clients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "mcp",
+                "clients"
+              ]
+            }
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode client A's slug follows is_code_mode_client again once cleared",
+          "protocolProfileBehavior": {
+            "followRedirects": false,
+            "disableCookies": true
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('the change is live without a restart: the slug serves code mode again', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var names = listed(pm.response);",
+                  "  pm.expect(names, 'code-mode tools missing after clearing the override: ' + pm.response.text()).to.include('executeToolCode');",
+                  "  pm.expect(names, 'client A\\'s own tool still listed after clearing the override: ' + pm.response.text()).to.not.include(A + '-echo');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/mcp/{{slugCodeModeSlugA}}"
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode remove the Virtual MCP",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('Virtual MCP removed', function () {",
+                  "  pm.expect(pm.response.code, 'cleanup failed - the Virtual MCP is still registered: ' + pm.response.text()).to.equal(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/mcp/virtual-mcps/{{slugCodeModeVmcpId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "mcp",
+                "virtual-mcps",
+                "{{slugCodeModeVmcpId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode remove the virtual key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('virtual key removed', function () {",
+                  "  pm.expect(pm.response.code, 'cleanup failed - the virtual key is still registered: ' + pm.response.text()).to.equal(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/governance/virtual-keys/{{slugCodeModeVkId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "governance",
+                "virtual-keys",
+                "{{slugCodeModeVkId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode queue this run's clients, plus any stale leftovers",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "var mine = [A, B, pm.collectionVariables.get('slugCodeModeClientBad')];",
+                  "// Names carry the run's Date.now(); anything younger than this may belong to a run still in progress.",
+                  "var STALE_MS = 3600000;",
+                  "pm.test('this run\\'s clients are listed', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var clients = pm.response.json().clients || [];",
+                  "  var ids = [], stale = [];",
+                  "  for (var i = 0; i < clients.length; i++) {",
+                  "    var cfg = clients[i].config;",
+                  "    if (!cfg || !cfg.name || cfg.name.indexOf('harness_slugcm_') !== 0) { continue; }",
+                  "    if (mine.indexOf(cfg.name) !== -1) { ids.push(cfg.client_id); continue; }",
+                  "    var stamp = parseInt(cfg.name.substring('harness_slugcm_'.length), 10);",
+                  "    if (stamp && (Date.now() - stamp) > STALE_MS) { stale.push(cfg.client_id); }",
+                  "  }",
+                  "  // A and B always; the refused create adds a third only if the server wrongly accepted it.",
+                  "  pm.expect(ids.length, 'this run\\'s clients are not both listed, so the cleanup below cannot reclaim them: ' + pm.response.text()).to.be.at.least(2);",
+                  "  pm.collectionVariables.set('slugCodeModeQueue', JSON.stringify(ids.concat(stale)));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/mcp/clients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "mcp",
+                "clients"
+              ]
+            }
+          }
+        },
+        {
+          "name": "[EXPECT-200] openai slug-code-mode remove every queued client",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var queue = JSON.parse(pm.collectionVariables.get('slugCodeModeQueue') || '[]');",
+                  "pm.collectionVariables.set('slugCodeModeClientId', queue.length ? queue[0] : 'none-queued');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The gateway may answer JSON-RPC as plain JSON or as an SSE 'data:' frame.",
+                  "function rpc(res) {",
+                  "  var text = res.text();",
+                  "  var line = text;",
+                  "  if (text.indexOf('data:') !== -1) {",
+                  "    var lines = text.split('\\n');",
+                  "    for (var i = 0; i < lines.length; i++) {",
+                  "      var t = lines[i].replace(/^data:\\s*/, '').trim();",
+                  "      if (t.charAt(0) === '{') { line = t; break; }",
+                  "    }",
+                  "  }",
+                  "  return JSON.parse(line);",
+                  "}",
+                  "function listed(res) {",
+                  "  var body = rpc(res);",
+                  "  pm.expect(body.result && body.result.tools, 'no tools array: ' + res.text()).to.be.an('array');",
+                  "  return body.result.tools.map(function (t) { return t.name; });",
+                  "}",
+                  "function resultText(body) {",
+                  "  return ((body.result && body.result.content) || []).map(function (c) { return c.text || ''; }).join('\\n');",
+                  "}",
+                  "var A = pm.collectionVariables.get('slugCodeModeClientA');",
+                  "var B = pm.collectionVariables.get('slugCodeModeClientB');",
+                  "",
+                  "pm.test('cleanup removes the queued client', function () {",
+                  "  pm.expect(pm.response.code, 'cleanup failed - a code-mode client is still registered and its code-mode tools will be served on every MCP-bearing request: ' + pm.response.text()).to.equal(200);",
+                  "});",
+                  "",
+                  "var queue = JSON.parse(pm.collectionVariables.get('slugCodeModeQueue') || '[]');",
+                  "queue.shift();",
+                  "pm.collectionVariables.set('slugCodeModeQueue', JSON.stringify(queue));",
+                  "",
+                  "// Bounded self-repeat so a stuck delete cannot spin forever.",
+                  "var sweeps = parseInt(pm.collectionVariables.get('slugCodeModeSweeps') || '0', 10) + 1;",
+                  "pm.collectionVariables.set('slugCodeModeSweeps', String(sweeps));",
+                  "",
+                  "if (queue.length > 0 && sweeps < 10) {",
+                  "  postman.setNextRequest(pm.info.requestName);",
+                  "} else {",
+                  "  pm.test('the sweep drained every queued client', function () {",
+                  "    pm.expect(queue.length, 'cleanup stopped after ' + sweeps + ' passes with clients still registered: ' + JSON.stringify(queue)).to.equal(0);",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/mcp/client/{{slugCodeModeClientId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "mcp",
+                "client",
+                "{{slugCodeModeClientId}}"
+              ]
+            }
+          }
+        }
+      ]
     }
   ]
 }

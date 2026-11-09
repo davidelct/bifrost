@@ -1156,6 +1156,27 @@ func FormatMCPSlugCodeMode(mode *bool) string {
 	return MCPSlugCodeModeDisabled
 }
 
+// CodeModeFor reports whether the client runs in code mode on ctx's request: slug_code_mode on its
+// own /mcp/<slug>, is_code_mode_client everywhere else.
+func (c *MCPClientConfig) CodeModeFor(ctx context.Context) bool {
+	if c.SlugCodeMode != nil && ctx != nil {
+		if client, _ := ctx.Value(BifrostContextKeyMCPGatewayClient).(string); client == c.Name {
+			return *c.SlugCodeMode
+		}
+	}
+	return c.IsCodeModeClient
+}
+
+// UsesCodeModeOnMCPOrSlug reports whether the client runs in code mode on /mcp or on its own slug.
+func (c *MCPClientConfig) UsesCodeModeOnMCPOrSlug() bool {
+	return c.IsCodeModeClient || (c.SlugCodeMode != nil && *c.SlugCodeMode)
+}
+
+// ServesOwnToolsOnMCPOrSlug reports whether /mcp or the client's own slug lists its tools directly (not behind code mode).
+func (c *MCPClientConfig) ServesOwnToolsOnMCPOrSlug() bool {
+	return !c.IsCodeModeClient || (c.SlugCodeMode != nil && !*c.SlugCodeMode)
+}
+
 // ResolveAllowByDefault settles the flag from the two keys the wire accepts for it: allow_by_default,
 // and the earlier allow_on_all_virtual_keys. The current key decides whenever it is present; the
 // earlier one is read only in its absence, so a caller that sends both is taken at its current word.

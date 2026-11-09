@@ -424,6 +424,16 @@ export function heroChips(config: MCPClientConfig, scopeLabel: string): { label:
 	];
 	if (perUserDiscoveryOn(config)) chips.push({ label: i18n.t("registry.form.perUserDiscovery", { ns: "mcp" }), variant: "default" });
 	if (config.is_code_mode_client) chips.push({ label: i18n.t("registry.view.codeMode", { ns: "mcp" }), variant: "secondary" });
+	if (config.slug_code_mode === "enabled")
+		chips.push({
+			label: i18n.t("registry.view.slugCodeModeEnabled", { ns: "mcp", slug: config.endpoint_slug ?? "" }),
+			variant: "secondary",
+		});
+	if (config.slug_code_mode === "disabled")
+		chips.push({
+			label: i18n.t("registry.view.slugCodeModeDisabled", { ns: "mcp", slug: config.endpoint_slug ?? "" }),
+			variant: "secondary",
+		});
 	return chips;
 }
 

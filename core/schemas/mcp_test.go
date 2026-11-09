@@ -3,6 +3,7 @@
 package schemas
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
@@ -195,5 +196,49 @@ func TestExchangesAsSSOApplication(t *testing.T) {
 		if got := tc.cfg.ExchangesAsSSOApplication(); got != tc.want {
 			t.Errorf("%s: ExchangesAsSSOApplication() = %v, want %v", name, got, tc.want)
 		}
+	}
+}
+
+// TestMCPClientConfigCodeModeFor pins that slug_code_mode decides only on the client's own /mcp/<slug>;
+// every other request, other slugs included, follows is_code_mode_client.
+func TestMCPClientConfigCodeModeFor(t *testing.T) {
+	onSlug := func(name string) context.Context {
+		return context.WithValue(context.Background(), BifrostContextKeyMCPGatewayClient, name)
+	}
+	cases := []struct {
+		name                                               string
+		codeMode                                           bool
+		slug                                               *bool
+		plain, ownSlug, otherSlug                          bool
+		usesCodeModeOnMCPOrSlug, servesOwnToolsOnMCPOrSlug bool
+	}{
+		{"code mode, inherit", true, nil, true, true, true, true, false},
+		{"code mode, slug disabled", true, Ptr(false), true, false, true, true, true},
+		{"direct, inherit", false, nil, false, false, false, false, true},
+		{"direct, slug enabled", false, Ptr(true), false, true, false, true, true},
+		{"code mode, slug enabled", true, Ptr(true), true, true, true, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &MCPClientConfig{Name: "github", IsCodeModeClient: tc.codeMode, SlugCodeMode: tc.slug}
+			if got := cfg.CodeModeFor(context.Background()); got != tc.plain {
+				t.Errorf("/mcp: want %v, got %v", tc.plain, got)
+			}
+			if got := cfg.CodeModeFor(onSlug("github")); got != tc.ownSlug {
+				t.Errorf("own slug: want %v, got %v", tc.ownSlug, got)
+			}
+			if got := cfg.CodeModeFor(onSlug("slack")); got != tc.otherSlug {
+				t.Errorf("other slug: want %v, got %v", tc.otherSlug, got)
+			}
+			if got := cfg.UsesCodeModeOnMCPOrSlug(); got != tc.usesCodeModeOnMCPOrSlug {
+				t.Errorf("UsesCodeModeOnMCPOrSlug: want %v, got %v", tc.usesCodeModeOnMCPOrSlug, got)
+			}
+			if got := cfg.ServesOwnToolsOnMCPOrSlug(); got != tc.servesOwnToolsOnMCPOrSlug {
+				t.Errorf("ServesOwnToolsOnMCPOrSlug: want %v, got %v", tc.servesOwnToolsOnMCPOrSlug, got)
+			}
+		})
+	}
+	if (&MCPClientConfig{Name: "github", IsCodeModeClient: true}).CodeModeFor(nil) != true {
+		t.Error("a nil context must follow is_code_mode_client")
 	}
 }

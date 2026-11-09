@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -372,8 +373,10 @@ func (h *MCPServerHandler) install(perCaller *perCallerEntries) {
 	ctx := context.Background()
 	h.perCaller.Store(h.perCaller.Load().union(perCaller))
 	// App-only tools are installed too; who may see and call them is decided per request.
-	availableTools := h.toolManager.GetAvailableMCPTools(coremcp.WithAllTools(ctx))
+	// Installs every tool /mcp or a client's /mcp/<slug> may serve; code mode is decided per request.
+	availableTools := h.toolManager.GetAvailableMCPTools(coremcp.WithGatewayTools(ctx))
 	tools, index := h.serverTools(availableTools)
+	index = h.indexSlugCodeModes(ctx, index, availableTools)
 	tools = append(tools, h.perCallerServerTools(perCaller, tools)...)
 	// Refusal tools go in last, so every exact name, per-caller placeholders included, wins over them.
 	index = indexPerCallerNames(index, perCaller)
@@ -460,6 +463,9 @@ func (h *MCPServerHandler) serverTools(availableTools []schemas.ChatTool) ([]ser
 		declaresOutputSchema := tool.MCP != nil && len(tool.MCP.OutputSchema) > 0
 
 		handler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if h.toolIndex.Load().hiddenByCodeMode(ctx, h.perCaller.Load(), toolName) {
+				return nil, toolNotFoundError(toolName)
+			}
 			return h.runTool(ctx, toolName, declaresOutputSchema, request), nil
 		}
 		_, aggregateMeta := toolMeta(tool)
@@ -642,6 +648,7 @@ func (h *MCPServerHandler) narrowListedTools(ctx context.Context, _ any, _ *mcp.
 		return
 	}
 	index, perCaller := h.toolIndex.Load(), h.perCaller.Load()
+	dropHiddenByCodeMode(ctx, index, perCaller, result)
 	narrowed := requestNarrowed(ctx)
 	if !narrowed {
 		dropRefusalTools(index, result) // a narrowed list keeps only Bifrost's own names
@@ -675,6 +682,67 @@ func (h *MCPServerHandler) narrowListedTools(ctx context.Context, _ any, _ *mcp.
 		result.Tools = kept
 	}
 	applyAppTools(callerCtx, index, result)
+}
+
+// indexSlugCodeModes records the clients whose own /mcp/<slug> overrides code mode, and whether the
+// code-mode tools were installed only for such a slug.
+func (h *MCPServerHandler) indexSlugCodeModes(ctx context.Context, index *gatewayToolIndex, installed []schemas.ChatTool) *gatewayToolIndex {
+	if h.config == nil {
+		return index
+	}
+	modes := h.config.GetMCPSlugCodeModes()
+	if len(modes) == 0 {
+		return index
+	}
+	if index == nil {
+		index = &gatewayToolIndex{}
+	}
+	index.slugCodeModes = modes
+	index.codeModeOnlyOnSlug = listsCodeModeTools(installed) && !listsCodeModeTools(h.toolManager.GetAvailableMCPTools(coremcp.WithAllTools(ctx)))
+	return index
+}
+
+// listsCodeModeTools reports whether tools include the code-mode tools.
+func listsCodeModeTools(tools []schemas.ChatTool) bool {
+	return slices.ContainsFunc(tools, func(tool schemas.ChatTool) bool {
+		return tool.Function != nil && tool.Function.Name == coremcp.ToolTypeExecuteToolCode
+	})
+}
+
+// hiddenByCodeMode reports whether a slug code mode override hides the installed tool from ctx's request:
+// a client's own tools where it runs in code mode, and the code-mode tools off the slugs that need them.
+// A caller's own per-user tools are decided by its discovery instead.
+func (index *gatewayToolIndex) hiddenByCodeMode(ctx context.Context, perCaller *perCallerEntries, name string) bool {
+	if index == nil || len(index.slugCodeModes) == 0 {
+		return false
+	}
+	gatewayClient, _ := ctx.Value(schemas.BifrostContextKeyMCPGatewayClient).(string)
+	if coremcp.IsCodeModeTool(name) {
+		return index.codeModeOnlyOnSlug && gatewayClient == "" && !perCaller.holdsTool(name)
+	}
+	client := coremcp.ToolClientName(name)
+	mode, ok := index.slugCodeModes[client]
+	if !ok || name == coremcp.ConnectToolName(client) {
+		return false
+	}
+	if gatewayClient == client {
+		return mode.SlugCodeMode
+	}
+	return mode.CodeMode
+}
+
+// dropHiddenByCodeMode leaves the tools a slug code mode override hides out of a tools/list answer.
+func dropHiddenByCodeMode(ctx context.Context, index *gatewayToolIndex, perCaller *perCallerEntries, result *mcp.ListToolsResult) {
+	if index == nil || len(index.slugCodeModes) == 0 {
+		return
+	}
+	kept := result.Tools[:0]
+	for _, tool := range result.Tools {
+		if !index.hiddenByCodeMode(ctx, perCaller, tool.Name) {
+			kept = append(kept, tool)
+		}
+	}
+	result.Tools = kept
 }
 
 // Admission

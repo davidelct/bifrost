@@ -292,6 +292,23 @@ describe("heroChips", () => {
 			{ label: "Code mode", variant: "secondary" },
 		]);
 	});
+
+	it("names a slug code mode override, and nothing for inherit", () => {
+		const base = [
+			{ label: "HTTP", variant: "outline" },
+			{ label: "Headers · Shared", variant: "outline" },
+		];
+		expect(heroChips(config({ auth_type: "headers", slug_code_mode: "inherit" }), "Shared")).toEqual(base);
+		expect(heroChips(config({ auth_type: "headers", is_code_mode_client: true, slug_code_mode: "disabled" }), "Shared")).toEqual([
+			...base,
+			{ label: "Code mode", variant: "secondary" },
+			{ label: "Direct tools on /mcp/github", variant: "secondary" },
+		]);
+		expect(heroChips(config({ auth_type: "headers", slug_code_mode: "enabled" }), "Shared")).toEqual([
+			...base,
+			{ label: "Code mode on /mcp/github", variant: "secondary" },
+		]);
+	});
 });
 
 describe("heroRows", () => {

@@ -8439,7 +8439,7 @@ func (c *Config) GetMCPClientNames() map[string]string {
 // registers it.
 type MCPPerUserDiscoveryClient struct {
 	Name     string
-	CodeMode bool // reached through the code-mode tools rather than its own
+	CodeMode bool // reached through the code-mode tools on /mcp or its own /mcp/<slug>
 }
 
 // GetMCPPerUserDiscoveryClients returns every enabled MCP client with
@@ -8459,7 +8459,35 @@ func (c *Config) GetMCPPerUserDiscoveryClients() map[string]MCPPerUserDiscoveryC
 		if result == nil {
 			result = make(map[string]MCPPerUserDiscoveryClient)
 		}
-		result[client.ID] = MCPPerUserDiscoveryClient{Name: client.Name, CodeMode: client.IsCodeModeClient}
+		result[client.ID] = MCPPerUserDiscoveryClient{Name: client.Name, CodeMode: client.UsesCodeModeOnMCPOrSlug()}
+	}
+	return result
+}
+
+// MCPSlugCodeMode is the code mode of an MCP client whose slug_code_mode overrides is_code_mode_client.
+type MCPSlugCodeMode struct {
+	CodeMode     bool // on /mcp, Virtual MCPs and LLM requests
+	SlugCodeMode bool // on its own /mcp/<slug>
+}
+
+// GetMCPSlugCodeModes returns every enabled MCP client with a slug_code_mode override, keyed by
+// client name; nil when none has one. Read-only snapshot.
+func (c *Config) GetMCPSlugCodeModes() map[string]MCPSlugCodeMode {
+	c.muMCP.RLock()
+	defer c.muMCP.RUnlock()
+
+	if c.MCPConfig == nil {
+		return nil
+	}
+	var result map[string]MCPSlugCodeMode
+	for _, client := range c.MCPConfig.ClientConfigs {
+		if client == nil || client.Disabled || client.SlugCodeMode == nil {
+			continue
+		}
+		if result == nil {
+			result = make(map[string]MCPSlugCodeMode)
+		}
+		result[client.Name] = MCPSlugCodeMode{CodeMode: client.IsCodeModeClient, SlugCodeMode: *client.SlugCodeMode}
 	}
 	return result
 }

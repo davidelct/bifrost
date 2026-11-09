@@ -24060,6 +24060,41 @@ func TestMergeMCPConfig_PreCodeModeHashKeepsDBEdits(t *testing.T) {
 	assert.True(t, cfg.MCPConfig.ClientConfigs[0].IsCodeModeClient, "the file version applies")
 }
 
+// TestGetMCPSlugCodeModes: the gateway learns every enabled client with an override, and nothing else; a
+// per-user discovery client counts as code mode when either /mcp or its slug runs it in code mode.
+func TestGetMCPSlugCodeModes(t *testing.T) {
+	perUser := func(name string, codeMode bool, slug *bool) *schemas.MCPClientConfig {
+		return &schemas.MCPClientConfig{
+			ID: name + "-id", Name: name, AuthType: schemas.MCPAuthTypePerUserHeaders, PerUserDiscovery: schemas.Ptr(true),
+			IsCodeModeClient: codeMode, SlugCodeMode: slug,
+		}
+	}
+	cfg := &Config{MCPConfig: &schemas.MCPConfig{ClientConfigs: []*schemas.MCPClientConfig{
+		{Name: "plain", IsCodeModeClient: true},
+		{Name: "slug_direct", IsCodeModeClient: true, SlugCodeMode: schemas.Ptr(false)},
+		{Name: "slug_code", SlugCodeMode: schemas.Ptr(true)},
+		{Name: "off", SlugCodeMode: schemas.Ptr(true), Disabled: true},
+		perUser("per_user_direct", false, nil),
+		perUser("per_user_slug_code", false, schemas.Ptr(true)),
+		perUser("per_user_code", true, schemas.Ptr(false)),
+	}}}
+
+	assert.Equal(t, map[string]MCPSlugCodeMode{
+		"slug_direct":        {CodeMode: true, SlugCodeMode: false},
+		"slug_code":          {CodeMode: false, SlugCodeMode: true},
+		"per_user_slug_code": {CodeMode: false, SlugCodeMode: true},
+		"per_user_code":      {CodeMode: true, SlugCodeMode: false},
+	}, cfg.GetMCPSlugCodeModes(), "only enabled clients with an override are listed")
+
+	perUserClients := cfg.GetMCPPerUserDiscoveryClients()
+	assert.False(t, perUserClients["per_user_direct-id"].CodeMode)
+	assert.True(t, perUserClients["per_user_slug_code-id"].CodeMode, "code mode on its slug only still needs the code-mode placeholders")
+	assert.True(t, perUserClients["per_user_code-id"].CodeMode)
+
+	assert.Nil(t, (&Config{MCPConfig: &schemas.MCPConfig{ClientConfigs: []*schemas.MCPClientConfig{{Name: "plain"}}}}).GetMCPSlugCodeModes(),
+		"no override anywhere leaves the gateway nothing to check")
+}
+
 // TestLoadMCPConfig_FileReloadKeepsDerivedEndpointSlug: a config.json client with no endpoint_slug gets
 // one derived at create; a later boot that re-syncs the file must keep serving /mcp/<slug>.
 func TestLoadMCPConfig_FileReloadKeepsDerivedEndpointSlug(t *testing.T) {

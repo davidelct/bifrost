@@ -496,6 +496,8 @@
 			"showErrorDetails": "Details anzeigen",
 			"hideErrorDetails": "Details ausblenden",
 			"codeMode": "Code-Modus",
+			"slugCodeModeEnabled": "Code-Modus auf /mcp/{{slug}}",
+			"slugCodeModeDisabled": "Direkte Tools auf /mcp/{{slug}}",
 			"spec": "Spezifikation",
 			"calls": "Ruft auf",
 			"copyBaseUrl": "Basis-URL kopieren",
