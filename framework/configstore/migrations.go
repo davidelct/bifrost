@@ -591,6 +591,7 @@ var configstoreMigrationSteps = []migrationStep{
 	{IDs: []string{"add_cache_creation_above_12hr_pricing_columns"}, run: migrationAddCacheCreationAbove12hrPricingColumns},
 	{IDs: []string{"add_datasheet_overrides_table"}, run: migrationAddDatasheetOverridesTable},
 	{IDs: []string{"add_usage_estimation_tokenizers_json_column"}, run: migrationAddUsageEstimationTokenizersJSONColumn},
+	{IDs: []string{"add_mcp_oauth_flow_origin_column"}, run: migrationAddMCPOauthFlowOriginColumn},
 }
 
 // warpLogEmbeddingColumns are the semantic-search configuration columns added
@@ -17153,6 +17154,32 @@ func migrationAddUsageEstimationTokenizersJSONColumn(ctx context.Context, db *go
 				return fmt.Errorf("failed to drop usage_estimation_tokenizers_json column: %w", err)
 			}
 			return nil
+		},
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error running %s migration: %w", migrationName, err)
+	}
+	return nil
+}
+
+// migrationAddMCPOauthFlowOriginColumn adds mcp_oauth_flows.origin, the dashboard
+// page a per-user sign-in started on, which the OAuth callback returns a
+// signed-in caller to. Existing flows get "" and return to the default page.
+func migrationAddMCPOauthFlowOriginColumn(ctx context.Context, db *gorm.DB, logger schemas.Logger) error {
+	migrationName := "add_mcp_oauth_flow_origin_column"
+	logger.Info("[configstore] starting migration %s", migrationName)
+	defer logger.Info("[configstore] finished migration %s", migrationName)
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: migrationName,
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			if err := setMigrationLockTimeout(tx); err != nil {
+				return err
+			}
+			return addColumnIfNotExists(tx, logger, &tables.TableMCPOauthFlow{}, "origin")
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return dropColumnIfExists(tx.WithContext(ctx), logger, &tables.TableMCPOauthFlow{}, "origin")
 		},
 	}})
 	if err := m.Migrate(); err != nil {
