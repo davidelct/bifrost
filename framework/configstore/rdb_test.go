@@ -824,6 +824,48 @@ func TestUpdateProvidersConfig_EnabledFromFileIsPersisted(t *testing.T) {
 	assert.False(t, enabledByName["key-b"], "unset enabled should keep the stored value")
 }
 
+// The eval flag and its concurrency are stored per key and survive a sync that leaves
+// them unset, the same way enabled does.
+func TestUpdateProvidersConfig_EvalFieldsArePersisted(t *testing.T) {
+	store := setupRDBTestStore(t)
+	ctx := context.Background()
+
+	providers := map[schemas.ModelProvider]ProviderConfig{
+		"openai": {
+			Keys: []schemas.Key{
+				{ID: "key-prod", Name: "key-prod", Value: *schemas.NewSecretVar("sk-prod"), Weight: 1.0},
+				{ID: "key-evals", Name: "key-evals", Value: *schemas.NewSecretVar("sk-evals"), Weight: 1.0, UseForEvals: new(true), EvalConcurrency: new(8)},
+			},
+		},
+	}
+	require.NoError(t, store.UpdateProvidersConfig(ctx, providers))
+
+	result, err := store.GetProvidersConfig(ctx)
+	require.NoError(t, err)
+	byName := map[string]schemas.Key{}
+	for _, key := range result["openai"].Keys {
+		byName[key.Name] = key
+	}
+	require.NotNil(t, byName["key-prod"].UseForEvals)
+	assert.False(t, *byName["key-prod"].UseForEvals, "a key is not used for evals unless marked")
+	require.NotNil(t, byName["key-evals"].UseForEvals)
+	assert.True(t, *byName["key-evals"].UseForEvals)
+	require.NotNil(t, byName["key-evals"].EvalConcurrency)
+	assert.Equal(t, 8, *byName["key-evals"].EvalConcurrency)
+
+	// A single-key update, as the UI makes, changes the concurrency.
+	keyEvals, err := store.GetProviderKey(ctx, "openai", "key-evals")
+	require.NoError(t, err)
+	keyEvals.EvalConcurrency = new(2)
+	require.NoError(t, store.UpdateProviderKey(ctx, "openai", "key-evals", *keyEvals))
+	updated, err := store.GetProviderKey(ctx, "openai", "key-evals")
+	require.NoError(t, err)
+	require.NotNil(t, updated.EvalConcurrency)
+	assert.Equal(t, 2, *updated.EvalConcurrency)
+	require.NotNil(t, updated.UseForEvals)
+	assert.True(t, *updated.UseForEvals)
+}
+
 func TestUpdateProvidersConfig_MultipleKeys(t *testing.T) {
 	store := setupRDBTestStore(t)
 	ctx := context.Background()

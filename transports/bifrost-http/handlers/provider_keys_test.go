@@ -232,6 +232,8 @@ func TestDecodeKeyUpdate_PartialBody(t *testing.T) {
 			SGLKeyConfig:      &schemas.SGLKeyConfig{URL: *schemas.NewSecretVar("http://old:30000")},
 			Enabled:           schemas.Ptr(false),
 			UseForBatchAPI:    schemas.Ptr(true),
+			UseForEvals:       schemas.Ptr(true),
+			EvalConcurrency:   schemas.Ptr(6),
 			Description:       "primary",
 		}
 	}
@@ -266,6 +268,12 @@ func TestDecodeKeyUpdate_PartialBody(t *testing.T) {
 		}
 		if merged.UseForBatchAPI == nil || !*merged.UseForBatchAPI {
 			t.Fatalf("use_for_batch_api: got %v, want the stored true", merged.UseForBatchAPI)
+		}
+		if merged.UseForEvals == nil || !*merged.UseForEvals {
+			t.Fatalf("use_for_evals: got %v, want the stored true", merged.UseForEvals)
+		}
+		if merged.EvalConcurrency == nil || *merged.EvalConcurrency != 6 {
+			t.Fatalf("eval_concurrency: got %v, want the stored 6", merged.EvalConcurrency)
 		}
 		if merged.Description != "primary" {
 			t.Fatalf("description: got %q, want primary", merged.Description)

@@ -18675,6 +18675,45 @@ func TestSQLite_Key_EnabledUIToggleSurvivesUpgrade(t *testing.T) {
 	}
 }
 
+// TestGenerateKeyHash_EvalFields verifies that the eval flag and its concurrency affect
+// hash generation, so a config.json change to either is detected during sync.
+func TestGenerateKeyHash_EvalFields(t *testing.T) {
+	base := func() schemas.Key {
+		return schemas.Key{Name: "test-key", Value: *schemas.NewSecretVar("sk-123"), Weight: 1}
+	}
+	with := func(use *bool, concurrency *int) schemas.Key {
+		key := base()
+		key.UseForEvals, key.EvalConcurrency = use, concurrency
+		return key
+	}
+	tests := []struct {
+		name        string
+		key1, key2  schemas.Key
+		expectEqual bool
+	}{
+		{"unset_vs_false_same_hash", with(nil, nil), with(new(false), nil), true},
+		{"unset_vs_true_different_hash", with(nil, nil), with(new(true), nil), false},
+		{"true_vs_true_same_hash", with(new(true), new(4)), with(new(true), new(4)), true},
+		{"concurrency_change_different_hash", with(new(true), new(4)), with(new(true), new(8)), false},
+		{"unset_concurrency_vs_set_different_hash", with(new(true), nil), with(new(true), new(4)), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hash1, err := configstore.GenerateKeyHash(tt.key1)
+			if err != nil {
+				t.Fatalf("Failed to generate hash for key1: %v", err)
+			}
+			hash2, err := configstore.GenerateKeyHash(tt.key2)
+			if err != nil {
+				t.Fatalf("Failed to generate hash for key2: %v", err)
+			}
+			if (hash1 == hash2) != tt.expectEqual {
+				t.Errorf("hash equality: got %v, want %v", hash1 == hash2, tt.expectEqual)
+			}
+		})
+	}
+}
+
 // TestGenerateKeyHash_UseForBatchAPIField verifies that the UseForBatchAPI field affects hash generation.
 // Different UseForBatchAPI values should produce different hashes.
 func TestGenerateKeyHash_UseForBatchAPIField(t *testing.T) {

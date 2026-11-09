@@ -539,6 +539,8 @@ func decodeKeyUpdate(body []byte, oldRawKey schemas.Key) (schemas.Key, error) {
 		"oauth_key_config":          func() { updateKey.OAuthKeyConfig = oldRawKey.OAuthKeyConfig },
 		"enabled":                   func() { updateKey.Enabled = oldRawKey.Enabled },
 		"use_for_batch_api":         func() { updateKey.UseForBatchAPI = oldRawKey.UseForBatchAPI },
+		"use_for_evals":             func() { updateKey.UseForEvals = oldRawKey.UseForEvals },
+		"eval_concurrency":          func() { updateKey.EvalConcurrency = oldRawKey.EvalConcurrency },
 		"use_anthropic_endpoints":   func() { updateKey.UseAnthropicEndpoints = oldRawKey.UseAnthropicEndpoints },
 		"use_openai_endpoints":      func() { updateKey.UseOpenAIEndpoints = oldRawKey.UseOpenAIEndpoints },
 		"description":               func() { updateKey.Description = oldRawKey.Description },
