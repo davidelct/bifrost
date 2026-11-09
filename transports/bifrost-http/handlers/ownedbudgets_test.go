@@ -130,3 +130,28 @@ func TestReconcileOwnedBudgetsRefusesANilTransaction(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, IsBadRequestError(err), "a missing transaction is the caller's bug, not a bad request")
 }
+
+// TestApplyRateLimitUpdate pins what a team's or customer's update does to its stored rate limit: a
+// maximum left out is cleared with its window, a maximum sent with a window takes it, and a maximum
+// sent without one keeps the window already stored instead of failing validation.
+func TestApplyRateLimitUpdate(t *testing.T) {
+	hour, day := "1h", "1d"
+	tokens, requests := int64(100), int64(10)
+	stored := func() *configstoreTables.TableRateLimit {
+		return &configstoreTables.TableRateLimit{TokenMaxLimit: &tokens, TokenResetDuration: &hour, RequestMaxLimit: &requests, RequestResetDuration: &hour}
+	}
+
+	keepWindow := stored()
+	newTokens := int64(200)
+	applyRateLimitUpdate(keepWindow, &UpdateRateLimitRequest{TokenMaxLimit: &newTokens, RequestMaxLimit: &requests})
+	assert.Equal(t, int64(200), *keepWindow.TokenMaxLimit)
+	require.NotNil(t, keepWindow.TokenResetDuration)
+	assert.Equal(t, "1h", *keepWindow.TokenResetDuration, "a maximum sent alone keeps the stored window")
+	require.NoError(t, validateRateLimit(keepWindow))
+
+	newWindow := stored()
+	applyRateLimitUpdate(newWindow, &UpdateRateLimitRequest{TokenMaxLimit: &tokens, TokenResetDuration: &day})
+	assert.Equal(t, "1d", *newWindow.TokenResetDuration)
+	assert.Nil(t, newWindow.RequestMaxLimit, "a maximum left out is cleared")
+	assert.Nil(t, newWindow.RequestResetDuration, "with its window")
+}
