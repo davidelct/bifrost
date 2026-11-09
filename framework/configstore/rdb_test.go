@@ -47,6 +47,7 @@ func setupRDBTestStore(t *testing.T) *RDBConfigStore {
 		&tables.TableTeam{},
 		&tables.TableClientConfig{},
 		&tables.TableGovernanceConfig{},
+		&tables.TableModelRouter{},
 		&tables.TablePlugin{},
 		&tables.TableMCPClient{},
 		&tables.TableMCPLibrary{},
@@ -163,72 +164,66 @@ func TestRDBConfigStore_ComplexityAnalyzerConfigRoundTrip(t *testing.T) {
 // a plain error. The API handler degrades to defaults on that distinction and
 // still fails on anything else, so losing it here turns a recoverable page into
 // a 500 without any test noticing.
+//
+// Each case saves a valid default router and then corrupts its row directly,
+// the way a rollback from a newer build or a hand edit would.
 func TestRDBConfigStore_GetComplexityAnalyzerConfigMarksUnreadableRows(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("analyzer row", func(t *testing.T) {
+	corrupt := func(t *testing.T, base *ComplexityAnalyzerConfig, columns map[string]any) *RDBConfigStore {
+		t.Helper()
 		store := setupRDBTestStore(t)
-		require.NoError(t, store.UpdateConfig(ctx, &tables.TableGovernanceConfig{
-			Key:   tables.ConfigComplexityAnalyzerConfigKey,
-			Value: `{"tier_boundaries":{"simple_medium":0.9,"medium_complex":0.1}}`,
-		}))
+		require.NoError(t, store.UpdateComplexityAnalyzerConfig(ctx, base))
+		require.NoError(t, store.DB().Model(&tables.TableModelRouter{}).
+			Where("id = ?", DefaultModelRouterID).Updates(columns).Error)
+		return store
+	}
+
+	t.Run("tier boundaries out of order", func(t *testing.T) {
+		store := corrupt(t, testComplexityAnalyzerConfig(), map[string]any{
+			"simple_medium_boundary":  0.9,
+			"medium_complex_boundary": 0.1,
+		})
 
 		_, err := store.GetComplexityAnalyzerConfig(ctx)
 		require.ErrorIs(t, err, ErrConfigUnreadable)
 	})
 
-	t.Run("semantic row", func(t *testing.T) {
-		store := setupRDBTestStore(t)
-		require.NoError(t, store.UpdateComplexityAnalyzerConfig(ctx, testComplexityAnalyzerConfig()))
-		require.NoError(t, store.UpdateConfig(ctx, &tables.TableGovernanceConfig{
-			Key:   tables.ConfigComplexitySemanticConfigKey,
-			Value: `{"keywords":`,
-		}))
+	t.Run("malformed phrase column", func(t *testing.T) {
+		store := corrupt(t, testComplexityAnalyzerConfig(), map[string]any{
+			"simple_phrases_json": `["unterminated`,
+		})
 
 		_, err := store.GetComplexityAnalyzerConfig(ctx)
 		require.ErrorIs(t, err, ErrConfigUnreadable)
 	})
 
-	t.Run("rows that do not combine into a runnable config", func(t *testing.T) {
-		store := setupRDBTestStore(t)
-		require.NoError(t, store.UpdateComplexityAnalyzerConfig(ctx, testComplexityAnalyzerConfig()))
-		// Each row is well formed on its own; the pair is not, because one
-		// phrase claims two tiers. The semantic block has to be present for the
-		// phrase rules to apply at all — without a classifier to embed them,
+	t.Run("columns that do not combine into a runnable config", func(t *testing.T) {
+		// Each column is well formed on its own; together they are not, because
+		// one phrase claims two tiers. The semantic block has to be present for
+		// the phrase rules to apply at all: without a classifier to embed them,
 		// the lists are just unused strings.
-		require.NoError(t, store.UpdateConfig(ctx, &tables.TableGovernanceConfig{
-			Key: tables.ConfigComplexitySemanticConfigKey,
-			Value: `{"semantic":{"provider":"openai","embedding_model":"text-embedding-3-small"},` +
-				`"keywords":{"simple_keywords":["shared phrase"],` +
-				`"medium_keywords":["shared phrase"],"complex_keywords":["complex"]}}`,
-		}))
+		store := corrupt(t, testSemanticAnalyzerConfig(), map[string]any{
+			"simple_phrases_json": `["shared phrase"]`,
+			"medium_phrases_json": `["shared phrase"]`,
+		})
 
 		_, err := store.GetComplexityAnalyzerConfig(ctx)
 		require.ErrorIs(t, err, ErrConfigUnreadable)
 	})
 
 	t.Run("stored semantic config exceeds phrase limit", func(t *testing.T) {
-		store := setupRDBTestStore(t)
-		base := testComplexityAnalyzerConfig()
-		require.NoError(t, store.UpdateComplexityAnalyzerConfig(ctx, base))
-
-		oversized := *base
-		oversized.Semantic = &ComplexitySemanticConfig{
-			Provider:       "openai",
-			EmbeddingModel: "text-embedding-3-small",
+		simple := make([]string, MaxComplexitySemanticPhrases-1)
+		for index := range simple {
+			simple[index] = fmt.Sprintf("simple-%d", index)
 		}
-		oversized.Keywords.SimpleKeywords = make([]string, MaxComplexitySemanticPhrases-1)
-		for index := range oversized.Keywords.SimpleKeywords {
-			oversized.Keywords.SimpleKeywords[index] = fmt.Sprintf("simple-%d", index)
-		}
-		oversized.Keywords.MediumKeywords = []string{"medium"}
-		oversized.Keywords.ComplexKeywords = []string{"complex"}
-		semanticRaw, err := encodeComplexitySemanticConfigRow(oversized)
+		simpleJSON, err := json.Marshal(simple)
 		require.NoError(t, err)
-		require.NoError(t, store.UpdateConfig(ctx, &tables.TableGovernanceConfig{
-			Key:   tables.ConfigComplexitySemanticConfigKey,
-			Value: string(semanticRaw),
-		}))
+		store := corrupt(t, testSemanticAnalyzerConfig(), map[string]any{
+			"simple_phrases_json":  string(simpleJSON),
+			"medium_phrases_json":  `["medium"]`,
+			"complex_phrases_json": `["complex"]`,
+		})
 
 		_, err = store.GetComplexityAnalyzerConfig(ctx)
 		require.ErrorIs(t, err, ErrConfigUnreadable)

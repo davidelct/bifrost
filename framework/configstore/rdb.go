@@ -7340,13 +7340,26 @@ func (s *RDBConfigStore) GetGovernanceConfig(ctx context.Context) (*GovernanceCo
 	if err := s.DB().WithContext(ctx).Find(&governanceConfigs).Error; err != nil {
 		return nil, err
 	}
+	// The default model router's config is still served here, as it was before
+	// routers had names. One this version cannot run degrades to the built-in
+	// defaults rather than failing the load. Other routers are not governance.
+	var complexityAnalyzerConfig *ComplexityAnalyzerConfig
+	defaultRouter, err := s.getModelRouterWithDB(ctx, s.DB(), DefaultModelRouterID)
+	switch {
+	case errors.Is(err, ErrConfigUnreadable):
+		if s.logger != nil {
+			s.logger.Warn("failed to load the default model router: %v", err)
+		}
+	case err != nil:
+		return nil, err
+	case defaultRouter != nil:
+		complexityAnalyzerConfig = &defaultRouter.ComplexityAnalyzerConfig
+	}
 	// Check if any config is present
-	if len(virtualKeys) == 0 && len(teams) == 0 && len(customers) == 0 && len(budgets) == 0 && len(rateLimits) == 0 && len(modelConfigs) == 0 && len(providers) == 0 && len(governanceConfigs) == 0 && len(routingRules) == 0 && len(pricingOverrides) == 0 {
+	if len(virtualKeys) == 0 && len(teams) == 0 && len(customers) == 0 && len(budgets) == 0 && len(rateLimits) == 0 && len(modelConfigs) == 0 && len(providers) == 0 && len(governanceConfigs) == 0 && len(routingRules) == 0 && len(pricingOverrides) == 0 && complexityAnalyzerConfig == nil {
 		return nil, nil
 	}
 	var authConfig *AuthConfig
-	var complexityAnalyzerConfig *ComplexityAnalyzerConfig
-	var complexitySemanticConfig *complexitySemanticConfigRecord
 	if len(governanceConfigs) > 0 {
 		// Checking if username and password is present
 		var username *string
@@ -7360,55 +7373,6 @@ func (s *RDBConfigStore) GetGovernanceConfig(ctx context.Context) (*GovernanceCo
 				password = bifrost.Ptr(entry.Value)
 			case tables.ConfigIsAuthEnabledKey:
 				isEnabled = entry.Value == "true"
-			case tables.ConfigComplexityAnalyzerConfigKey:
-				if strings.TrimSpace(entry.Value) == "" {
-					continue
-				}
-				decoded, err := DecodeComplexityAnalyzerConfig([]byte(entry.Value))
-				if err != nil {
-					if s.logger != nil {
-						s.logger.Warn("failed to load complexity analyzer config from governance_config: %v", err)
-					}
-					continue
-				}
-				complexityAnalyzerConfig = decoded
-			case tables.ConfigComplexitySemanticConfigKey:
-				if strings.TrimSpace(entry.Value) == "" {
-					continue
-				}
-				decoded, err := decodeComplexitySemanticConfigRow([]byte(entry.Value))
-				if err != nil {
-					if s.logger != nil {
-						s.logger.Warn("failed to load complexity semantic config from governance_config: %v", err)
-					}
-					continue
-				}
-				complexitySemanticConfig = decoded
-			}
-		}
-		// Attached after the loop because governance_config rows arrive in no
-		// particular order, so the semantic row may be read before the analyzer
-		// row it belongs to. A semantic section that fails validation is dropped
-		// rather than discarding the analyzer config with it, matching how a
-		// bad analyzer row degrades to defaults instead of failing the load.
-		// The analyzer row alone is not a usable config: it carries tier
-		// boundaries, while the exemplars every classification needs live in the
-		// semantic row. Without that row there is nothing to route with, so the
-		// caller falls back to defaults exactly as it would on a fresh install.
-		if complexityAnalyzerConfig != nil {
-			combined := applyComplexitySemanticConfigRow(complexityAnalyzerConfig, complexitySemanticConfig)
-			if combined == nil {
-				complexityAnalyzerConfig = nil
-			} else {
-				normalized := combined.Normalized()
-				if err := normalized.Validate(); err != nil {
-					if s.logger != nil {
-						s.logger.Warn("failed to apply complexity semantic config from governance_config: %v", err)
-					}
-					complexityAnalyzerConfig = nil
-				} else {
-					complexityAnalyzerConfig = &normalized
-				}
 			}
 		}
 		if username != nil && password != nil {
@@ -7434,20 +7398,25 @@ func (s *RDBConfigStore) GetGovernanceConfig(ctx context.Context) (*GovernanceCo
 	}, nil
 }
 
-// GetComplexityAnalyzerConfig retrieves the typed complexity analyzer config.
+// GetComplexityAnalyzerConfig retrieves the default model router's config, or
+// nil when it has never been saved, in which case callers run on the built-in
+// defaults.
 func (s *RDBConfigStore) GetComplexityAnalyzerConfig(ctx context.Context) (*ComplexityAnalyzerConfig, error) {
-	return s.getComplexityAnalyzerConfigWithDB(ctx, s.DB())
+	router, err := s.getModelRouterWithDB(ctx, s.DB(), DefaultModelRouterID)
+	if err != nil || router == nil {
+		return nil, err
+	}
+	return &router.ComplexityAnalyzerConfig, nil
 }
 
-// getComplexityAnalyzerConfigWithDB reads the analyzer row and the semantic row
-// and combines them into one runtime config. Both are required: the analyzer row
-// holds the tier boundaries and the semantic row holds the exemplars, and a
-// config missing either cannot classify anything.
-func (s *RDBConfigStore) getComplexityAnalyzerConfigWithDB(ctx context.Context, db *gorm.DB) (*ComplexityAnalyzerConfig, error) {
-	if db == nil {
-		db = s.DB()
-	}
-
+// readLegacyComplexityAnalyzerConfig reads the complexity config from the two
+// governance_config rows it lived in before model routers existed, combined
+// into one runtime config. Both are required: the analyzer row holds the tier
+// boundaries and the semantic row holds the exemplars, and a config missing
+// either cannot classify anything. Only the migration that moves the config
+// into the default router reads these rows; saves of the default router still
+// write them, for a rolled-back Bifrost.
+func readLegacyComplexityAnalyzerConfig(ctx context.Context, db *gorm.DB) (*ComplexityAnalyzerConfig, error) {
 	var configEntry tables.TableGovernanceConfig
 	err := db.WithContext(ctx).First(&configEntry, "key = ?", tables.ConfigComplexityAnalyzerConfigKey).Error
 	if err != nil {
@@ -7467,7 +7436,7 @@ func (s *RDBConfigStore) getComplexityAnalyzerConfigWithDB(ctx context.Context, 
 		return nil, nil
 	}
 
-	semantic, err := s.getComplexitySemanticConfigWithDB(ctx, db)
+	semantic, err := readLegacyComplexitySemanticRow(ctx, db)
 	if err != nil {
 		return nil, err
 	}
@@ -7489,13 +7458,9 @@ func (s *RDBConfigStore) getComplexityAnalyzerConfigWithDB(ctx context.Context, 
 	return &normalized, nil
 }
 
-// getComplexitySemanticConfigWithDB reads the semantic row. An absent or empty
+// readLegacyComplexitySemanticRow reads the semantic row. An absent or empty
 // row means semantic classification is not configured, which is not an error.
-func (s *RDBConfigStore) getComplexitySemanticConfigWithDB(ctx context.Context, db *gorm.DB) (*complexitySemanticConfigRecord, error) {
-	if db == nil {
-		db = s.DB()
-	}
-
+func readLegacyComplexitySemanticRow(ctx context.Context, db *gorm.DB) (*complexitySemanticConfigRecord, error) {
 	var configEntry tables.TableGovernanceConfig
 	err := db.WithContext(ctx).First(&configEntry, "key = ?", tables.ConfigComplexitySemanticConfigKey).Error
 	if err != nil {
@@ -7510,7 +7475,10 @@ func (s *RDBConfigStore) getComplexitySemanticConfigWithDB(ctx context.Context, 
 	return decodeComplexitySemanticConfigRow([]byte(configEntry.Value))
 }
 
-// UpdateComplexityAnalyzerConfig normalizes, validates, and persists the typed analyzer config.
+// UpdateComplexityAnalyzerConfig normalizes, validates, and persists the
+// default model router's config, keeping its name and description. Section
+// hashes and the embedding fingerprint the caller omits keep their stored
+// values; see saveModelRouterWithTx.
 func (s *RDBConfigStore) UpdateComplexityAnalyzerConfig(ctx context.Context, config *ComplexityAnalyzerConfig, tx ...*gorm.DB) error {
 	if config == nil {
 		return fmt.Errorf("complexity analyzer config is nil")
@@ -7520,215 +7488,24 @@ func (s *RDBConfigStore) UpdateComplexityAnalyzerConfig(ctx context.Context, con
 	if err := normalized.Validate(); err != nil {
 		return err
 	}
-
-	if len(tx) > 0 && tx[0] != nil {
-		return s.updateComplexityAnalyzerConfigWithTx(ctx, &normalized, tx[0], true)
-	}
-	// Standalone calls own the transaction so the carry-over read below and the save
-	// that follows it cannot interleave with a concurrent update.
-	return s.DB().WithContext(ctx).Transaction(func(txDB *gorm.DB) error {
-		return s.updateComplexityAnalyzerConfigWithTx(ctx, &normalized, txDB, true)
+	router := ModelRouter{ID: DefaultModelRouterID, ComplexityAnalyzerConfig: normalized}
+	return s.inModelRouterTx(ctx, tx, func(txDB *gorm.DB) error {
+		_, err := s.saveModelRouterWithTx(ctx, txDB, router, true, true)
+		return err
 	})
 }
 
-// ResetComplexityAnalyzerConfig restores the tier boundaries and the phrase lists from
-// defaults, invalidates the embedding fingerprint since it named the exemplars just
-// replaced, and keeps every other section of the stored record — the semantic block,
-// the section hashes — returning what was persisted.
-//
-// The read and the save share one transaction, and the read takes the same FOR UPDATE lock
-// as updateComplexityAnalyzerConfigWithTx, for the same reason that function does: a reset
-// that read the record outside the transaction would hold a stale copy of the very sections
-// it means to preserve, and would write that stale copy back over an edit committed in
-// between. Which sections count as "default" is the caller's to define, so they arrive as an
-// argument rather than being rebuilt here.
+// ResetComplexityAnalyzerConfig resets the default model router and returns
+// what was persisted; see ResetModelRouter.
 func (s *RDBConfigStore) ResetComplexityAnalyzerConfig(ctx context.Context, defaults *ComplexityAnalyzerConfig) (*ComplexityAnalyzerConfig, error) {
 	if defaults == nil {
 		return nil, fmt.Errorf("complexity analyzer defaults are nil")
 	}
-
-	var persisted ComplexityAnalyzerConfig
-	err := s.DB().WithContext(ctx).Transaction(func(txDB *gorm.DB) error {
-		// Lock before reading, so the read is serialized against a concurrent save even
-		// when no row exists yet — otherwise a first-time save committed in between is
-		// invisible here and gets overwritten by the defaults below.
-		if err := s.lockComplexityAnalyzerConfigRow(ctx, txDB); err != nil {
-			return err
-		}
-		existing, err := s.getComplexityAnalyzerConfigWithDB(ctx, dbForUpdate(txDB))
-		if err != nil && !errors.Is(err, ErrConfigUnreadable) {
-			return err
-		}
-		// A stored config this version cannot read is the state reset exists to
-		// recover from, so it resets to the defaults rather than reporting the
-		// error back and leaving the operator with no way out.
-		restored := *defaults
-		if existing != nil {
-			restored = *existing
-			restored.TierBoundaries = defaults.TierBoundaries
-			restored.Keywords = defaults.Keywords
-			// The fingerprint records which exemplars were embedded, and the phrase
-			// lists were just replaced, so it is stale.
-			restored.EmbeddingFingerprint = ""
-		}
-		normalized := restored.Normalized()
-		if err := normalized.Validate(); err != nil {
-			return err
-		}
-		// carryOverFingerprint is false: an empty fingerprint here means the reset
-		// just invalidated it, not that the caller forgot to set it, so the
-		// still-stale row on disk must not be read back in to fill it.
-		if err := s.updateComplexityAnalyzerConfigWithTx(ctx, &normalized, txDB, false); err != nil {
-			return err
-		}
-		persisted = normalized
-		return nil
-	})
+	router, err := s.ResetModelRouter(ctx, DefaultModelRouterID, defaults)
 	if err != nil {
 		return nil, err
 	}
-	return &persisted, nil
-}
-
-// lockComplexityAnalyzerConfigRow takes the row lock that serializes the reset and update
-// paths against each other, and is what makes that serialization hold on a fresh install.
-//
-// FOR UPDATE locks a row, so it locks nothing at all when the row does not exist yet: a
-// reset and a first-time save would both read "absent" and proceed, letting the reset write
-// its defaults over the semantic block the save had just committed — the one section reset
-// exists to preserve. Inserting a placeholder first gives both transactions the same row to
-// contend for. An empty value still reads back as "no stored config" through
-// getComplexityAnalyzerConfigWithDB, so the placeholder changes no caller's view, and the
-// caller's own save overwrites it before the transaction commits.
-//
-// Both rows are locked, always analyzer first, because a save and a reset each
-// write both and would otherwise be free to take them in opposite orders.
-//
-// txDB must be a transaction, otherwise the lock is released before the caller can use it.
-func (s *RDBConfigStore) lockComplexityAnalyzerConfigRow(ctx context.Context, txDB *gorm.DB) error {
-	for _, key := range []string{
-		tables.ConfigComplexityAnalyzerConfigKey,
-		tables.ConfigComplexitySemanticConfigKey,
-	} {
-		if err := txDB.WithContext(ctx).
-			Clauses(clause.OnConflict{DoNothing: true}).
-			Create(&tables.TableGovernanceConfig{Key: key}).Error; err != nil {
-			return err
-		}
-		var row tables.TableGovernanceConfig
-		if err := dbForUpdate(txDB.WithContext(ctx)).
-			First(&row, "key = ?", key).Error; err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// readComplexityCarryOverWithDB reads the section hashes and the embedding fingerprint
-// off the two stored rows, for a save that arrives without them.
-//
-// It reads the rows rather than going through getComplexityAnalyzerConfigWithDB, which
-// reports "nothing stored" whenever the analyzer row is absent or blank: that is what a
-// freshly inserted lock placeholder looks like, and what an installation whose only write
-// was the exemplar backfill migration looks like, and in both the semantic row still holds
-// the keyword hashes and the fingerprint. An unreadable row is treated as no previous
-// state for the same reason: bookkeeping this version cannot decode must not stop a valid
-// config from being saved over it.
-func (s *RDBConfigStore) readComplexityCarryOverWithDB(ctx context.Context, db *gorm.DB) (ComplexityAnalyzerConfigHashes, string, error) {
-	var hashes ComplexityAnalyzerConfigHashes
-
-	// The tier-boundaries hash is the analyzer row's; every other hash, and the
-	// fingerprint, belong to the semantic row.
-	var analyzerEntry tables.TableGovernanceConfig
-	switch err := db.WithContext(ctx).First(&analyzerEntry, "key = ?", tables.ConfigComplexityAnalyzerConfigKey).Error; {
-	case err == nil:
-		if strings.TrimSpace(analyzerEntry.Value) != "" {
-			decoded, err := DecodeComplexityAnalyzerConfig([]byte(analyzerEntry.Value))
-			if err != nil && !errors.Is(err, ErrConfigUnreadable) {
-				return hashes, "", err
-			}
-			if decoded != nil {
-				hashes.TierBoundaries = decoded.ConfigHashes.TierBoundaries
-			}
-		}
-	case errors.Is(err, gorm.ErrRecordNotFound), errors.Is(err, ErrNotFound):
-	default:
-		return hashes, "", err
-	}
-
-	semanticRow, err := s.getComplexitySemanticConfigWithDB(ctx, db)
-	if err != nil {
-		if errors.Is(err, ErrConfigUnreadable) {
-			return hashes, "", nil
-		}
-		return hashes, "", err
-	}
-	if semanticRow == nil {
-		return hashes, "", nil
-	}
-	hashes.SimpleKeywords = semanticRow.ConfigHashes.SimpleKeywords
-	hashes.MediumKeywords = semanticRow.ConfigHashes.MediumKeywords
-	hashes.ComplexKeywords = semanticRow.ConfigHashes.ComplexKeywords
-	hashes.SemanticSettings = semanticRow.ConfigHashes.SemanticSettings
-	hashes.ClassifierSettings = semanticRow.ConfigHashes.ClassifierSettings
-	hashes.DecisionSettings = semanticRow.ConfigHashes.DecisionSettings
-	hashes.LLMSettings = semanticRow.ConfigHashes.LLMSettings
-	hashes.SessionSettings = semanticRow.ConfigHashes.SessionSettings
-	hashes.SuggestionsSettings = semanticRow.ConfigHashes.SuggestionsSettings
-	return hashes, semanticRow.EmbeddingFingerprint, nil
-}
-
-// updateComplexityAnalyzerConfigWithTx carries over ConfigHashes and EmbeddingFingerprint
-// from the stored config when the incoming one omits them, then persists the result. The
-// row is locked first (a plain read on SQLite, whose writer serialization already prevents
-// the interleave) so a concurrent updater cannot save a stale copy of either field between
-// this read and the save. txDB must be a transaction.
-//
-// carryOverFingerprint gates only the fingerprint half of the carry-over: an empty
-// ConfigHashes always reads the stored hashes back in, but an empty fingerprint is
-// ambiguous between "the caller omitted it" (carry the stored one forward) and "a
-// reset just invalidated it" (leave it empty). Callers that intend the latter pass
-// false so this does not read the still-stale row it is racing to overwrite.
-func (s *RDBConfigStore) updateComplexityAnalyzerConfigWithTx(ctx context.Context, normalized *ComplexityAnalyzerConfig, txDB *gorm.DB, carryOverFingerprint bool) error {
-	// Taken unconditionally, not just when the carry-over read below runs: a save that
-	// already carries both fields still has to serialize against a concurrent reset.
-	if err := s.lockComplexityAnalyzerConfigRow(ctx, txDB); err != nil {
-		return err
-	}
-	needsHashes := normalized.ConfigHashes.Empty()
-	needsFingerprint := carryOverFingerprint && normalized.EmbeddingFingerprint == ""
-	if needsHashes || needsFingerprint {
-		hashes, fingerprint, err := s.readComplexityCarryOverWithDB(ctx, dbForUpdate(txDB))
-		if err != nil {
-			return err
-		}
-		if needsHashes {
-			normalized.ConfigHashes = hashes
-		}
-		if needsFingerprint {
-			normalized.EmbeddingFingerprint = fingerprint
-		}
-	}
-
-	raw, err := encodeComplexityAnalyzerConfig(*normalized)
-	if err != nil {
-		return err
-	}
-	if err := s.UpdateConfig(ctx, &tables.TableGovernanceConfig{
-		Key:   tables.ConfigComplexityAnalyzerConfigKey,
-		Value: string(raw),
-	}, txDB); err != nil {
-		return err
-	}
-
-	semanticRaw, err := encodeComplexitySemanticConfigRow(*normalized)
-	if err != nil {
-		return err
-	}
-	return s.UpdateConfig(ctx, &tables.TableGovernanceConfig{
-		Key:   tables.ConfigComplexitySemanticConfigKey,
-		Value: string(semanticRaw),
-	}, txDB)
+	return &router.ComplexityAnalyzerConfig, nil
 }
 
 // GetAuthConfig retrieves the auth configuration from the database.

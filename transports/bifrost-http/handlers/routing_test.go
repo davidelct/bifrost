@@ -83,12 +83,13 @@ func TestComplexityAnalyzerConfigGetDegradesOnUnreadableConfig(t *testing.T) {
 	SetLogger(&mockLogger{})
 	store := setupPricingOverrideHandlerStore(t)
 
-	// Well-formed JSON, but the boundaries are out of order, so it fails
-	// validation on the way out of the store.
-	require.NoError(t, store.UpdateConfig(context.Background(), &tables.TableGovernanceConfig{
-		Key:   tables.ConfigComplexityAnalyzerConfigKey,
-		Value: `{"tier_boundaries":{"simple_medium":0.9,"medium_complex":0.1}}`,
-	}))
+	// A valid default router whose boundaries are then put out of order, so it
+	// fails validation on the way out of the store.
+	defaults := complexity.DefaultAnalyzerConfig()
+	require.NoError(t, store.UpdateComplexityAnalyzerConfig(context.Background(), &defaults))
+	require.NoError(t, store.DB().Model(&tables.TableModelRouter{}).
+		Where("id = ?", configstore.DefaultModelRouterID).
+		Updates(map[string]any{"simple_medium_boundary": 0.9, "medium_complex_boundary": 0.1}).Error)
 
 	_, err := store.GetComplexityAnalyzerConfig(context.Background())
 	require.ErrorIs(t, err, configstore.ErrConfigUnreadable,

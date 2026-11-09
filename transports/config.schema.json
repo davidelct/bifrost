@@ -1590,7 +1590,9 @@
           "$ref": "#/$defs/auth_config"
         },
         "complexity_analyzer_config": {
-          "$ref": "#/$defs/complexity_analyzer_config"
+          "$ref": "#/$defs/complexity_analyzer_config",
+          "deprecated": true,
+          "description": "DEPRECATED: declare the default router as the top-level model_routers entry with id \"default\" instead. Configures the default model router; ignored when model_routers is present."
         },
         "model_configs": {
           "type": "array",
@@ -2363,6 +2365,13 @@
       "description": "Edits to the synced model datasheet (pricing and model parameters) that survive every datasheet sync. Matched by (provider, model, mode) with hash-based change detection: a file entry is applied when it changes, so edits made in the UI stand until the file entry itself changes. In config.json source-of-truth mode stored overrides absent from this list are removed.",
       "items": {
         "$ref": "#/$defs/datasheet_override"
+      }
+    },
+    "model_routers": {
+      "type": "array",
+      "description": "Named model routers, each a complexity classifier with its own phrases and settings. The entry with id \"default\" configures the default router in place of governance.complexity_analyzer_config. Unless config.json is the source of truth, dashboard edits to sections the file has not changed are kept.",
+      "items": {
+        "$ref": "#/$defs/model_router"
       }
     },
     "mcp": {
@@ -7160,6 +7169,124 @@
             "required": [
               "suggestions"
             ]
+          },
+          "then": {
+            "required": [
+              "llm"
+            ]
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "model_router": {
+      "type": "object",
+      "description": "One model router: an id, a name and a description beside the same settings as complexity_analyzer_config.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "description": "Stable router id that routing rules reference. \"default\" is the default router."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "description": "Display name, unique across routers. \"Default\" is reserved for the default router."
+        },
+        "description": {
+          "type": "string",
+          "description": "What the router is for."
+        },
+        "tier_boundaries": {
+          "$ref": "#/$defs/complexity_tier_boundaries"
+        },
+        "keywords": {
+          "$ref": "#/$defs/complexity_analyzer_keywords"
+        },
+        "classifier": {
+          "type": "string",
+          "enum": [
+            "semantic",
+            "decision"
+          ],
+          "default": "semantic",
+          "description": "Primary complexity classifier. Defaults to semantic."
+        },
+        "semantic": {
+          "$ref": "#/$defs/complexity_semantic_config"
+        },
+        "decision": {
+          "$ref": "#/$defs/complexity_decision_config"
+        },
+        "llm": {
+          "$ref": "#/$defs/complexity_llm_config"
+        },
+        "session": {
+          "$ref": "#/$defs/complexity_session_config"
+        },
+        "suggestions": {
+          "$ref": "#/$defs/complexity_suggestions_config"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "keywords"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "session": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "enabled"
+                ]
+              }
+            },
+            "required": [
+              "session"
+            ],
+            "not": {
+              "required": [
+                "classifier"
+              ],
+              "properties": {
+                "classifier": {
+                  "const": "decision"
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "semantic"
+            ]
+          }
+        },
+        {
+          "description": "Selecting the llm fallback without configuring the classifier it names loads a semantic classifier whose non-answers have nothing to fall back to; the loader rejects it for the same reason.",
+          "if": {
+            "required": [
+              "semantic"
+            ],
+            "properties": {
+              "semantic": {
+                "required": [
+                  "fallback"
+                ],
+                "properties": {
+                  "fallback": {
+                    "const": "llm"
+                  }
+                }
+              }
+            }
           },
           "then": {
             "required": [
