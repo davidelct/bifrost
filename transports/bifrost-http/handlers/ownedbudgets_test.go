@@ -2,8 +2,11 @@ package handlers
 
 import (
 	"context"
+	"fmt"
+	"github.com/valyala/fasthttp"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/maximhq/bifrost/framework/configstore"
 	configstoreTables "github.com/maximhq/bifrost/framework/configstore/tables"
@@ -185,6 +188,45 @@ func TestReconcileOwnedBudgetsNewWindowFollowsTheResetChoice(t *testing.T) {
 			for _, b := range out {
 				if b.ResetDuration == "1M" {
 					assert.Equal(t, tc.want, b.CurrentUsage)
+				}
+			}
+		})
+	}
+}
+
+// TestUpdateTeamNewBudgetFollowsTheResetChoice pins that a team's budgets now go through the shared
+// reconciler: a window added on an edit starts with the spend already counted in the team's shorter
+// window when usage is preserved, and at zero when the operator resets it - as a customer's does.
+func TestUpdateTeamNewBudgetFollowsTheResetChoice(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		reset bool
+		want  float64
+	}{
+		{name: "preserve carries the spend over", reset: false, want: 5},
+		{name: "reset starts it at zero", reset: true, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			SetLogger(&mockLogger{})
+			store := setupPricingOverrideHandlerStore(t)
+			handler := &GovernanceHandler{configStore: store, governanceManager: pricingOverrideTestGovernanceManager{}}
+			ctx := context.Background()
+			teamID := "team-carry"
+			require.NoError(t, store.CreateTeam(ctx, &configstoreTables.TableTeam{ID: teamID, Name: "Carry " + tc.name}))
+			require.NoError(t, store.CreateBudget(ctx, &configstoreTables.TableBudget{ID: "team-daily", MaxLimit: 10, ResetDuration: "1d", TeamID: &teamID, LastReset: time.Now()}))
+			require.NoError(t, store.UpdateBudgetUsage(ctx, "team-daily", 5))
+
+			body := fmt.Sprintf(`{"budgets":[{"id":"team-daily","max_limit":10,"reset_duration":"1d"},{"max_limit":100,"reset_duration":"1M"}],"reset_budget_usage":%t}`, tc.reset)
+			put := newGovernanceTeamIDCtx(teamID, body)
+			handler.updateTeam(put)
+			require.Equal(t, fasthttp.StatusOK, put.Response.StatusCode(), "body: %s", put.Response.Body())
+
+			team, err := store.GetTeam(ctx, teamID)
+			require.NoError(t, err)
+			require.Len(t, team.Budgets, 2)
+			for _, b := range team.Budgets {
+				if b.ResetDuration == "1M" {
+					assert.Equal(t, tc.want, b.CurrentUsage, "the new monthly budget")
 				}
 			}
 		})
