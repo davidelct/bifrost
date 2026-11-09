@@ -1026,7 +1026,10 @@ func ReconcileOwnedBudgets(ctx context.Context, store configstore.ConfigStore, t
 			if setOwner != nil {
 				setOwner(&budget)
 			}
-			inheritUsageFromClosestShorterBudget(&budget, existing, false)
+			// A new window starts with the spend already counted in the closest shorter window it
+			// contains, since that money was spent inside it too - unless the operator chose to reset
+			// usage on this edit, which starts every budget it touches, new ones included, at zero.
+			inheritUsageFromClosestShorterBudget(&budget, existing, usageReset != nil && usageReset.requested)
 			if err := validateBudget(&budget); err != nil {
 				return nil, err
 			}
