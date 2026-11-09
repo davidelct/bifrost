@@ -8,6 +8,10 @@ Official Helm charts for deploying [Bifrost](https://github.com/maximhq/bifrost)
 
 ## Changelog
 
+### Upcoming
+
+- Added `bifrost.mcp.clientConfigs[].slugCodeMode` (`slug_code_mode`): code mode for the client on its own `/mcp/<slug>` only (`inherit`, `enabled` or `disabled`); `/mcp`, Virtual MCPs and LLM requests follow `isCodeModeClient`.
+
 ### 2.1.48
 
 - Added `bifrost.mcp.clientConfigs[].oauthConfig.useClientMetadataDocument` (`use_client_metadata_document`): register with Bifrost's Client ID Metadata Document even when the authorization server does not advertise it.

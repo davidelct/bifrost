@@ -36,6 +36,8 @@ export interface MCPClientConfig {
   /** Headers for auth_type 'headers'. API shape: Record<string, EnvVarLike> */
   headers?: Record<string, EnvVarLike | string>
   isCodeMode?: boolean
+  /** Code mode on the client's own /mcp/<slug>: 'inherit', 'enabled' or 'disabled' */
+  slugCodeMode?: 'inherit' | 'enabled' | 'disabled'
   isPingAvailable?: boolean
   /** Max protocol version option: 'global', 'auto' or a version */
   maxProtocolVersion?: string
@@ -376,6 +378,17 @@ export class MCPRegistryPage extends BasePage {
     return ((await this.storedClientConfig(request, name)).max_protocol_version as string | undefined) ?? ''
   }
 
+  /** The stored slug_code_mode of the named client over the API. */
+  async storedSlugCodeMode(request: APIRequestContext, name: string): Promise<string | undefined> {
+    return (await this.storedClientConfig(request, name)).slug_code_mode as string | undefined
+  }
+
+  /** Picks a slug code mode option in the open add form or detail sheet. */
+  async selectSlugCodeMode(scope: Locator, value: string): Promise<void> {
+    await scope.getByTestId('mcp-client-slug-code-mode-select').click()
+    await this.page.getByTestId(`mcp-client-slug-code-mode-${value}`).click()
+  }
+
   /** Picks a max protocol version option in the open add form or detail sheet. */
   async selectMaxProtocolVersion(scope: Locator, value: string): Promise<void> {
     await scope.getByTestId('mcp-client-max-protocol-version-select').click()
@@ -409,6 +422,10 @@ export class MCPRegistryPage extends BasePage {
         const expectedState = config.isCodeMode ? 'checked' : 'unchecked'
         await expect(this.codeModeSwitch).toHaveAttribute('data-state', expectedState, { timeout: 3000 })
       }
+    }
+
+    if (config.slugCodeMode) {
+      await this.selectSlugCodeMode(this.sheet, config.slugCodeMode)
     }
 
     // Toggle ping available if specified (Radix Switch)
@@ -966,6 +983,10 @@ export class MCPRegistryPage extends BasePage {
 
     if (updates.maxProtocolVersion) {
       await this.selectMaxProtocolVersion(this.detailSheet, updates.maxProtocolVersion)
+    }
+
+    if (updates.slugCodeMode) {
+      await this.selectSlugCodeMode(this.detailSheet, updates.slugCodeMode)
     }
 
     // Save changes

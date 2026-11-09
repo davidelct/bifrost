@@ -6978,6 +6978,50 @@ func TestUpdateMCPClientConfig_KeepsPerUserDiscoveryWhenUnset(t *testing.T) {
 	assert.Equal(t, schemas.Ptr(false), stored(), "an update can turn the flag off")
 }
 
+// TestMCPClientSlugCodeModeRoundTrip pins that the slug override is stored as given, including
+// clearing it back to inherit (NULL), unlike the keep-when-unset flags above.
+func TestMCPClientSlugCodeModeRoundTrip(t *testing.T) {
+	store := setupRDBTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, store.CreateMCPClientConfig(ctx, &schemas.MCPClientConfig{
+		ID:               "scm-client",
+		Name:             "scm_client",
+		ConnectionType:   schemas.MCPConnectionTypeHTTP,
+		ConnectionString: schemas.NewSecretVar("https://example.invalid/mcp"),
+		AuthType:         schemas.MCPAuthTypeHeaders,
+		IsCodeModeClient: true,
+		SlugCodeMode:     schemas.Ptr(false),
+	}))
+	stored := func() *bool {
+		row, err := store.GetMCPClientByID(ctx, "scm-client")
+		require.NoError(t, err)
+		return row.SlugCodeMode
+	}
+	require.Equal(t, schemas.Ptr(false), stored(), "created with the override")
+
+	config, err := store.GetMCPConfig(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, config)
+	var loaded *schemas.MCPClientConfig
+	for _, client := range config.ClientConfigs {
+		if client.ID == "scm-client" {
+			loaded = client
+		}
+	}
+	require.NotNil(t, loaded)
+	assert.Equal(t, schemas.Ptr(false), loaded.SlugCodeMode, "the loaded client config carries the override")
+
+	row, err := store.GetMCPClientByID(ctx, "scm-client")
+	require.NoError(t, err)
+	row.SlugCodeMode = schemas.Ptr(true)
+	require.NoError(t, store.UpdateMCPClientConfig(ctx, "scm-client", row))
+	assert.Equal(t, schemas.Ptr(true), stored(), "an update can change the override")
+
+	row.SlugCodeMode = nil
+	require.NoError(t, store.UpdateMCPClientConfig(ctx, "scm-client", row))
+	assert.Nil(t, stored(), "an update can clear the override back to inherit")
+}
+
 // Saving by target updates the existing row in place: same ID and created_at,
 // new patches. Delete reports a missing row as ErrNotFound.
 func TestDatasheetOverride_UpsertByTargetAndDelete(t *testing.T) {

@@ -916,6 +916,7 @@ type MCPClientConfig struct {
 	Name              string            `json:"name"`                          // Client name
 	EndpointSlug      string            `json:"endpoint_slug"`                 // URL-safe, immutable; serves /mcp/<slug>
 	IsCodeModeClient  bool              `json:"is_code_mode_client"`           // Whether the client is a code mode client
+	SlugCodeMode      *bool             `json:"-"`                             // Code mode on /mcp/<slug>; nil inherits IsCodeModeClient. Wire: slug_code_mode
 	ConnectionType    MCPConnectionType `json:"connection_type"`               // How to connect (HTTP, STDIO, SSE, or InProcess)
 	ConnectionString  *SecretVar        `json:"connection_string,omitempty"`   // HTTP or SSE URL (required for HTTP or SSE connections)
 	StdioConfig       *MCPStdioConfig   `json:"stdio_config,omitempty"`        // STDIO configuration (required for STDIO connections)
@@ -1051,6 +1052,7 @@ func (c *MCPClientConfig) UnmarshalJSON(data []byte) error {
 		ToolExecutionTimeout  *json.RawMessage `json:"tool_execution_timeout,omitempty"`
 		AllowByDefault        *bool            `json:"allow_by_default,omitempty"`
 		AllowOnAllVirtualKeys *bool            `json:"allow_on_all_virtual_keys,omitempty"`
+		SlugCodeMode          *string          `json:"slug_code_mode,omitempty"`
 		*alias
 	}{alias: (*alias)(c)}
 
@@ -1075,7 +1077,7 @@ func (c *MCPClientConfig) UnmarshalJSON(data []byte) error {
 			c.ToolExecutionTimeout = dur
 		}
 		c.AllowByDefault = ResolveAllowByDefault(aux.AllowByDefault, aux.AllowOnAllVirtualKeys)
-		return nil
+		return c.setSlugCodeMode(aux.SlugCodeMode)
 	}
 
 	// Allow Go duration strings while keeping numeric tokens as json.Number.
@@ -1086,6 +1088,7 @@ func (c *MCPClientConfig) UnmarshalJSON(data []byte) error {
 		ToolExecutionTimeout  *json.RawMessage `json:"tool_execution_timeout,omitempty"`
 		AllowByDefault        *bool            `json:"allow_by_default,omitempty"`
 		AllowOnAllVirtualKeys *bool            `json:"allow_on_all_virtual_keys,omitempty"`
+		SlugCodeMode          *string          `json:"slug_code_mode,omitempty"`
 		*alias
 	}{alias: (*alias)(c)}
 	if err := json.Unmarshal(data, auxStr); err != nil {
@@ -1106,7 +1109,51 @@ func (c *MCPClientConfig) UnmarshalJSON(data []byte) error {
 		c.ToolExecutionTimeout = dur
 	}
 	c.AllowByDefault = ResolveAllowByDefault(auxStr.AllowByDefault, auxStr.AllowOnAllVirtualKeys)
+	return c.setSlugCodeMode(auxStr.SlugCodeMode)
+}
+
+// setSlugCodeMode applies a decoded slug_code_mode; an absent key leaves the field unset.
+func (c *MCPClientConfig) setSlugCodeMode(raw *string) error {
+	if raw == nil {
+		return nil
+	}
+	mode, err := ParseMCPSlugCodeMode(*raw)
+	if err != nil {
+		return err
+	}
+	c.SlugCodeMode = mode
 	return nil
+}
+
+// slug_code_mode wire values. Go holds the setting as *bool: nil inherits is_code_mode_client.
+const (
+	MCPSlugCodeModeInherit  = "inherit"
+	MCPSlugCodeModeEnabled  = "enabled"
+	MCPSlugCodeModeDisabled = "disabled"
+)
+
+// ParseMCPSlugCodeMode converts a slug_code_mode wire value to its *bool form.
+func ParseMCPSlugCodeMode(value string) (*bool, error) {
+	switch value {
+	case MCPSlugCodeModeInherit:
+		return nil, nil
+	case MCPSlugCodeModeEnabled:
+		return Ptr(true), nil
+	case MCPSlugCodeModeDisabled:
+		return Ptr(false), nil
+	}
+	return nil, fmt.Errorf("invalid slug_code_mode %q: must be one of %q, %q, %q", value, MCPSlugCodeModeInherit, MCPSlugCodeModeEnabled, MCPSlugCodeModeDisabled)
+}
+
+// FormatMCPSlugCodeMode converts the *bool form back to its slug_code_mode wire value.
+func FormatMCPSlugCodeMode(mode *bool) string {
+	switch {
+	case mode == nil:
+		return MCPSlugCodeModeInherit
+	case *mode:
+		return MCPSlugCodeModeEnabled
+	}
+	return MCPSlugCodeModeDisabled
 }
 
 // ResolveAllowByDefault settles the flag from the two keys the wire accepts for it: allow_by_default,
@@ -1169,9 +1216,10 @@ func (c MCPClientConfig) MarshalJSON() ([]byte, error) {
 	type shadow struct {
 		ToolExecutionTimeout  string `json:"tool_execution_timeout,omitempty"`
 		AllowOnAllVirtualKeys bool   `json:"allow_on_all_virtual_keys"`
+		SlugCodeMode          string `json:"slug_code_mode"`
 		*alias
 	}
-	s := shadow{alias: (*alias)(&c), AllowOnAllVirtualKeys: c.AllowByDefault}
+	s := shadow{alias: (*alias)(&c), AllowOnAllVirtualKeys: c.AllowByDefault, SlugCodeMode: FormatMCPSlugCodeMode(c.SlugCodeMode)}
 	if c.ToolExecutionTimeout > 0 {
 		s.ToolExecutionTimeout = c.ToolExecutionTimeout.String()
 	}

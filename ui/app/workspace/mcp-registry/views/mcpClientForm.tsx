@@ -40,6 +40,7 @@ const emptyForm: CreateMCPClientRequest = {
 	name: "",
 	endpoint_slug: "",
 	is_code_mode_client: false,
+	slug_code_mode: "inherit",
 	is_ping_available: true,
 	connection_type: "http",
 	connection_string: emptySecretVar,

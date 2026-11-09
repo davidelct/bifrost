@@ -2916,6 +2916,7 @@ func mergeMCPConfig(ctx context.Context, config *Config, configData *ConfigData,
 	clientConfigsToAdd := make([]*schemas.MCPClientConfig, 0)
 	clientConfigsToUpdate := make([]configstoreTables.TableMCPClient, 0)
 	perUserDiscoveryChanged := make(map[string]*schemas.MCPClientConfig)
+	clientHashUpgrades := make(map[string]string) // client ID -> current hash, for stored hashes from the pre-code-mode formula
 	for _, newClientConfig := range tempMCPConfig.ClientConfigs {
 		if newClientConfig == nil {
 			continue
@@ -2944,6 +2945,14 @@ func mergeMCPConfig(ctx context.Context, config *Config, configData *ConfigData,
 			if newClientConfig.Name != "" && existingClientConfig.Name == newClientConfig.Name {
 				found = true
 				if existingClientConfig.ConfigHash != fileHash {
+					if legacy, err := configstore.MCPClientHashMatchesLegacyCodeMode(fileClientRow, existingClientConfig.ConfigHash, existingClientConfig.IsCodeModeClient); err == nil && legacy {
+						// Same file client, hashed before is_code_mode_client was: keep the stored edits and move the
+						// stored hash to the current form so this runs once.
+						logger.Debug("MCP client %q carries a pre-code-mode hash, keeping DB config", newClientConfig.Name)
+						existingClientConfig.ConfigHash = fileHash
+						clientHashUpgrades[existingClientConfig.ID] = fileHash
+						break
+					}
 					if err := pinnedPerUserDiscoveryError(newClientConfig, existingClientConfig); err != nil {
 						logger.Error("skipping MCP client config %q from config file: %v; keeping the stored configuration", newClientConfig.Name, err)
 						break
@@ -2993,6 +3002,9 @@ func mergeMCPConfig(ctx context.Context, config *Config, configData *ConfigData,
 	}
 	// Add new client configs to existing ones.
 	config.MCPConfig.ClientConfigs = append(mcpConfig.ClientConfigs, clientConfigsToAdd...)
+	if config.ConfigStore != nil {
+		upgradeMCPClientConfigHashes(ctx, config.ConfigStore, clientHashUpgrades)
+	}
 	// Persist additions and config-driven updates.
 	if config.ConfigStore != nil && (len(clientConfigsToAdd) > 0 || len(clientConfigsToUpdate) > 0) {
 		logger.Debug("updating MCP config in store with %d new clients and %d updated clients", len(clientConfigsToAdd), len(clientConfigsToUpdate))
@@ -3008,6 +3020,22 @@ func mergeMCPConfig(ctx context.Context, config *Config, configData *ConfigData,
 			} else if client := perUserDiscoveryChanged[update.ClientID]; client != nil {
 				readBackPerUserDiscoveryChange(ctx, config.ConfigStore, client)
 			}
+		}
+	}
+}
+
+// upgradeMCPClientConfigHashes rewrites each stored client's config_hash to its current form, keeping every
+// other stored value.
+func upgradeMCPClientConfigHashes(ctx context.Context, store configstore.ConfigStore, hashes map[string]string) {
+	for id, hash := range hashes {
+		row, err := store.GetMCPClientByID(ctx, id)
+		if err != nil || row == nil {
+			logger.Warn("failed to read MCP client %s to upgrade its config hash: %v", id, err)
+			continue
+		}
+		row.ConfigHash = hash
+		if err := store.UpdateMCPClientConfig(ctx, id, row); err != nil {
+			logger.Warn("failed to upgrade config hash of MCP client %q: %v", row.Name, err)
 		}
 	}
 }
@@ -3186,6 +3214,7 @@ func mcpClientConfigToTable(clientConfig *schemas.MCPClientConfig) (configstoreT
 		Name:                   clientConfig.Name,
 		EndpointSlug:           clientConfig.EndpointSlug,
 		IsCodeModeClient:       clientConfig.IsCodeModeClient,
+		SlugCodeMode:           clientConfig.SlugCodeMode,
 		ConnectionType:         string(clientConfig.ConnectionType),
 		ConnectionString:       clientConfig.ConnectionString,
 		StdioConfig:            clientConfig.StdioConfig,
@@ -9920,6 +9949,7 @@ func (c *Config) UpdateMCPClient(ctx context.Context, id string, updatedConfig *
 	// as these are read-only and not sent in the update request
 	c.MCPConfig.ClientConfigs[configIndex].Name = updatedConfig.Name
 	c.MCPConfig.ClientConfigs[configIndex].IsCodeModeClient = updatedConfig.IsCodeModeClient
+	c.MCPConfig.ClientConfigs[configIndex].SlugCodeMode = updatedConfig.SlugCodeMode
 	c.MCPConfig.ClientConfigs[configIndex].Headers = updatedConfig.Headers
 	c.MCPConfig.ClientConfigs[configIndex].ToolsToExecute = updatedConfig.ToolsToExecute
 	c.MCPConfig.ClientConfigs[configIndex].ToolsToAutoExecute = updatedConfig.ToolsToAutoExecute

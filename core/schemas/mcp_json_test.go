@@ -228,3 +228,64 @@ func TestMCPClientConfigMarshalMirrorsAllowOnAllVirtualKeys(t *testing.T) {
 		}
 	}
 }
+
+// TestMCPClientConfigSlugCodeMode pins the wire mapping of slug_code_mode to its *bool form, on
+// both decode paths, and that an unknown value is refused rather than read as inherit.
+func TestMCPClientConfigSlugCodeMode(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want *bool
+	}{
+		{"absent inherits", `{"name":"demo"}`, nil},
+		{"inherit", `{"name":"demo","slug_code_mode":"inherit"}`, nil},
+		{"enabled", `{"name":"demo","slug_code_mode":"enabled"}`, Ptr(true)},
+		{"disabled", `{"name":"demo","slug_code_mode":"disabled"}`, Ptr(false)},
+		{"disabled with duration string", `{"name":"demo","tool_sync_interval":"10m","slug_code_mode":"disabled"}`, Ptr(false)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var cfg MCPClientConfig
+			if err := sonic.Unmarshal([]byte(tc.raw), &cfg); err != nil {
+				t.Fatalf("unexpected unmarshal error: %v", err)
+			}
+			if (cfg.SlugCodeMode == nil) != (tc.want == nil) || (tc.want != nil && *cfg.SlugCodeMode != *tc.want) {
+				t.Fatalf("slug_code_mode: want %v, got %v (wire: %s)", FormatMCPSlugCodeMode(tc.want), FormatMCPSlugCodeMode(cfg.SlugCodeMode), tc.raw)
+			}
+		})
+	}
+
+	for _, raw := range []string{
+		`{"name":"demo","slug_code_mode":"on"}`,
+		`{"name":"demo","slug_code_mode":""}`,
+		`{"name":"demo","tool_sync_interval":"10m","slug_code_mode":"true"}`,
+	} {
+		var cfg MCPClientConfig
+		if err := sonic.Unmarshal([]byte(raw), &cfg); err == nil || !strings.Contains(err.Error(), "slug_code_mode") {
+			t.Fatalf("expected a slug_code_mode error for %s, got %v", raw, err)
+		}
+	}
+}
+
+// TestMCPClientConfigMarshalSlugCodeMode pins that the setting is always written as its wire value,
+// "inherit" included, and reads back to the same *bool.
+func TestMCPClientConfigMarshalSlugCodeMode(t *testing.T) {
+	for _, mode := range []*bool{nil, Ptr(true), Ptr(false)} {
+		cfg := MCPClientConfig{Name: "demo", ConnectionType: MCPConnectionTypeHTTP, SlugCodeMode: mode}
+		raw, err := sonic.Marshal(cfg)
+		if err != nil {
+			t.Fatalf("unexpected marshal error: %v", err)
+		}
+		want := `"slug_code_mode":"` + FormatMCPSlugCodeMode(mode) + `"`
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("expected %s in output, got: %s", want, raw)
+		}
+		var got MCPClientConfig
+		if err := sonic.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("unexpected unmarshal error: %v", err)
+		}
+		if FormatMCPSlugCodeMode(got.SlugCodeMode) != FormatMCPSlugCodeMode(mode) {
+			t.Fatalf("round-trip changed slug_code_mode: want %s, got %s", FormatMCPSlugCodeMode(mode), FormatMCPSlugCodeMode(got.SlugCodeMode))
+		}
+	}
+}

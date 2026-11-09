@@ -1910,6 +1910,7 @@ export type MCPOpenAPIConfigSchema = z.infer<typeof mcpOpenAPIConfigSchema>;
 export const mcpClientUpdateSchema = z
 	.object({
 		is_code_mode_client: z.boolean().optional(),
+		slug_code_mode: z.enum(["inherit", "enabled", "disabled"]).optional(),
 		is_ping_available: z.boolean().optional(),
 		needs_session_stickiness: z.boolean().optional(),
 		per_user_discovery: z.boolean().optional(),

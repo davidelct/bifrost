@@ -280,6 +280,38 @@ test.describe("MCP Registry", () => {
     });
   });
 
+  test.describe("Slug Code Mode", () => {
+    test("should store a code mode override for the slug endpoint and clear it back to inherit", async ({
+      mcpRegistryPage,
+      request,
+    }) => {
+      const clientData = createCodeModeClientData({
+        name: `slug_code_mode_${Date.now()}`,
+        slugCodeMode: "disabled",
+      });
+      const stored = () => mcpRegistryPage.storedSlugCodeMode(request, clientData.name);
+
+      const created = await mcpRegistryPage.createClient(clientData);
+      expect(created).toBe(true);
+      createdClients.push(clientData.name);
+      expect(await stored()).toBe("disabled");
+
+      await mcpRegistryPage.openClientEditor(clientData.name);
+      await expect(mcpRegistryPage.detailSheet.getByTestId("mcp-client-slug-code-mode-select")).toContainText("Direct tools");
+      await mcpRegistryPage.closeDetailSheet();
+
+      await mcpRegistryPage.editClient(clientData.name, { slugCodeMode: "inherit" });
+      expect(await stored()).toBe("inherit");
+    });
+
+    test("should default a new client to inherit", async ({ mcpRegistryPage }) => {
+      await mcpRegistryPage.createBtn.click();
+      await expect(mcpRegistryPage.sheet).toBeVisible();
+      await expect(mcpRegistryPage.sheet.getByTestId("mcp-client-slug-code-mode-select")).toContainText("Inherit (Disabled)");
+      await mcpRegistryPage.closeSheet();
+    });
+  });
+
   test.describe("Max Protocol Version", () => {
     test("should create a client with a max protocol version and switch it to the global setting", async ({
       mcpRegistryPage,

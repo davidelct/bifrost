@@ -18,8 +18,9 @@ type TableMCPClient struct {
 	ClientID                string             `gorm:"type:varchar(255);uniqueIndex;not null" json:"client_id"`
 	Name                    string             `gorm:"type:varchar(255);uniqueIndex;not null" json:"name"`
 	EndpointSlug            string             `gorm:"column:endpoint_slug;type:varchar(255);uniqueIndex" json:"endpoint_slug"`
-	IsCodeModeClient        bool               `gorm:"default:false" json:"is_code_mode_client"`         // Whether the client is a code mode client
-	ConnectionType          string             `gorm:"type:varchar(20);not null" json:"connection_type"` // schemas.MCPConnectionType
+	IsCodeModeClient        bool               `gorm:"default:false" json:"is_code_mode_client"`              // Whether the client is a code mode client
+	SlugCodeMode            *bool              `gorm:"column:slug_code_mode" json:"slug_code_mode,omitempty"` // Code mode on /mcp/<slug>; NULL inherits is_code_mode_client
+	ConnectionType          string             `gorm:"type:varchar(20);not null" json:"connection_type"`      // schemas.MCPConnectionType
 	ConnectionString        *schemas.SecretVar `gorm:"type:text" json:"connection_string,omitempty"`
 	StdioConfigJSON         *string            `gorm:"type:text" json:"-"`                              // JSON serialized schemas.MCPStdioConfig
 	TLSConfigJSON           *string            `gorm:"type:text" json:"-"`                              // JSON serialized schemas.MCPTLSConfig
