@@ -24,7 +24,7 @@ import { cn } from "@/lib/utils";
 import { clefModelFromProvider, isDecisionProvider } from "@/lib/utils/decisionModelProviders";
 import { Link } from "@tanstack/react-router";
 import type { ParseKeys } from "i18next";
-import { ArrowRight, Check, ChevronRight, Info, LoaderCircle, Pencil, RotateCcw, Scale, TriangleAlert, Waypoints } from "lucide-react";
+import { ArrowRight, ChevronRight, Info, LoaderCircle, Pencil, RotateCcw, Scale, TriangleAlert, Waypoints } from "lucide-react";
 import { useCallback, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import {
@@ -37,7 +37,7 @@ import {
 	type UseFormSetValue,
 } from "react-hook-form";
 import { decisionTimeoutFieldValue, type AnalyzerFormValues, type DecisionProviderState } from "../formSchema";
-import { FieldLabel, InfoTip, SectionHeading } from "./formPrimitives";
+import { FieldLabel, InfoTip, RadioCards, SectionHeading } from "./formPrimitives";
 
 // The Complexity Router page's sections. Each binds to the page's single form.
 
@@ -826,36 +826,23 @@ const CLASSIFIER_OPTIONS: {
 export function ClassifierChoice({ value, onChange }: { value: Classifier | undefined; onChange: (value: Classifier) => void }) {
 	const { t: tcpx } = useTranslation("models", { keyPrefix: "routing.complexityUi" });
 	return (
-		<div role="radiogroup" aria-label={tcpx("stepClassifier")} className="grid gap-3 sm:grid-cols-2">
-			{CLASSIFIER_OPTIONS.map((option) => {
-				const selected = option.value === value;
-				return (
-					<button
-						key={option.value}
-						type="button"
-						role="radio"
-						aria-checked={selected}
-						onClick={() => onChange(option.value)}
-						data-testid={`complexity-router-classifier-option-${option.value}`}
-						className={cn(
-							"hover:bg-accent/50 flex h-full flex-col gap-2 rounded-md border p-4 text-left transition-colors",
-							selected && "border-primary bg-primary/5",
-						)}
-					>
-						<div className="flex w-full items-center gap-2">
-							{option.value === "decision" ? (
-								<Scale className="text-muted-foreground size-4" />
-							) : (
-								<Waypoints className="text-muted-foreground size-4" />
-							)}
-							<span className="text-sm font-medium">{tcpx(option.title)}</span>
-							{selected && <Check className="ml-auto size-4 text-green-600" />}
-						</div>
-						<p className="text-muted-foreground text-xs leading-relaxed">{tcpx(option.description)}</p>
-					</button>
-				);
-			})}
-		</div>
+		<RadioCards
+			value={value}
+			onChange={onChange}
+			ariaLabel={tcpx("stepClassifier")}
+			testIdPrefix="complexity-router-classifier-option"
+			options={CLASSIFIER_OPTIONS.map((option) => ({
+				value: option.value,
+				title: tcpx(option.title),
+				description: tcpx(option.description),
+				icon:
+					option.value === "decision" ? (
+						<Scale className="text-muted-foreground size-4" />
+					) : (
+						<Waypoints className="text-muted-foreground size-4" />
+					),
+			}))}
+		/>
 	);
 }
 

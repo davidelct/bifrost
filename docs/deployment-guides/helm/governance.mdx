@@ -479,6 +479,51 @@ Existing releases that still use `code_keywords`, `technical_keywords`, and `rea
 
 ---
 
+## Model Routers and Model Routing Rules
+
+`bifrost.modelRouters` declares named model routers, and `bifrost.modelRoutingRules` sends requests to them. The chart renders them as the top-level `model_routers` and `model_routing_rules` sections of `config.json`, passing every field through as written. Leave either list empty (the default) to render nothing and keep what is stored.
+
+Each router takes an `id` (letters, digits, `_` and `-`), a unique `name`, an optional `description`, and the same settings as `complexityAnalyzerConfig` above: `keywords` (required), `classifier`, `semantic`, `decision`, `llm`, `session`, `suggestions`, and `tier_boundaries`. The entry with `id: default` configures the default router. While `modelRouters` is set, `governance.complexityAnalyzerConfig` is ignored, so declare the default router here instead.
+
+Model routing rules run after the routing rules. The first rule that matches names a router through `model_router_id`, the router classifies the request as `SIMPLE`, `MEDIUM`, or `COMPLEX`, and that tier's target replaces the provider and model. A tier with no target keeps the request's model. `cel_expression`, `scope`, `scope_id`, and `priority` work as in routing rules, but `cel_expression` cannot use `complexity_tier`, and priorities are unique among model routing rules only.
+
+```yaml
+bifrost:
+  modelRouters:
+    - id: "support"
+      name: "Support"
+      description: "Classifies support traffic"
+      classifier: decision
+      decision:
+        provider: typesafe
+        model: jev-latest
+      keywords:
+        simple_keywords: ["how do I reset my password?"]
+        medium_keywords: ["why is my invoice higher than last month?"]
+        complex_keywords: ["plan a zero-downtime migration of our SSO setup."]
+
+  modelRoutingRules:
+    - id: "support-tiers"
+      name: "Support tiers"
+      enabled: true
+      cel_expression: "model.startsWith('gpt-')"   # empty matches every request in scope
+      model_router_id: "support"                    # "default" is the default router
+      scope: "global"
+      priority: 0
+      targets:                                      # weights within a tier sum to 1
+        - tier: SIMPLE
+          provider: "openai"
+          model: "gpt-4o-mini"
+          weight: 1
+        - tier: COMPLEX
+          provider: "anthropic"
+          model: "claude-sonnet-4-5"
+          weight: 1
+          fallbacks: ["openai/gpt-4o"]              # replaces the request's chain when this target is chosen
+```
+
+---
+
 ## Full Example
 
 ```yaml

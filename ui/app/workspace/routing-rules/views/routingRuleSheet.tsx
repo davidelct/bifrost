@@ -3,22 +3,16 @@
  * Create/Edit form for routing rules
  */
 
-import { CustomerSelector } from "@/components/entitySelectors/customerSelector";
-import { TeamSelector } from "@/components/entitySelectors/teamSelector";
-import { VirtualKeySelector } from "@/components/entitySelectors/virtualKeySelector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ModelSelector } from "@/components/ui/modelSelector";
-import { ProviderSelector, type ProviderSelectorOption } from "@/components/ui/providerSelector";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { type ProviderSelectorOption } from "@/components/ui/providerSelector";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { resolveProviderIconKey } from "@/lib/constants/icons";
 import { getProviderLabel } from "@/lib/constants/logs";
-import { getUserPicker } from "@/lib/registries/userPicker";
 import { getErrorMessage } from "@/lib/store";
 import { useGetAllKeysQuery, useGetProvidersQuery } from "@/lib/store/apis/providersApi";
 import { useCreateRoutingRuleMutation, useGetRoutingRulesQuery, useUpdateRoutingRuleMutation } from "@/lib/store/apis/routingRulesApi";
@@ -26,7 +20,6 @@ import {
 	DEFAULT_ROUTING_FALLBACK,
 	DEFAULT_ROUTING_RULE_FORM_DATA,
 	DEFAULT_ROUTING_TARGET,
-	ROUTING_RULE_SCOPES,
 	RoutingFallbackFormData,
 	RoutingRule,
 	RoutingRuleFormData,
@@ -42,17 +35,24 @@ import {
 	summarizeTTFTDisplay,
 } from "@/lib/utils/routingRules";
 import { validateRateLimitAndBudgetRules, validateRoutingRules } from "@/lib/utils/celConverterRouting";
-import { isValidRuleGroupType, normalizeRoutingRuleGroupQuery } from "@/lib/utils/routingRuleGroupQuery";
+import {
+	CELRuleBuilder,
+	type ConditionMode,
+	FallbackRow,
+	initialConditionMode,
+	RuleScopeEntityField,
+	RuleScopeSelect,
+	scopeNoun,
+	TargetRow,
+} from "./ruleShared";
+import { normalizeRoutingRuleGroupQuery } from "@/lib/utils/routingRuleGroupQuery";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
-import { Plus, Trash2, X } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Plus } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
-import type { ParseKeys, TFunction } from "i18next";
 import { Trans, useTranslation } from "react-i18next";
 import { RuleGroupType } from "react-querybuilder";
 import { toast } from "sonner";
-// Side-effect import: registers the enterprise user picker (no-op in OSS builds).
-import "@enterprise/lib/registrations/userPicker";
 
 interface RoutingRuleDialogProps {
 	open: boolean;
@@ -64,53 +64,6 @@ interface RoutingRuleDialogProps {
 const defaultQuery: RuleGroupType = {
 	combinator: "and",
 	rules: [],
-};
-
-type ConditionMode = "builder" | "cel";
-
-/**
- * Decides which conditions editor a rule opens in. Rules authored outside the visual
- * builder (e.g. via the API) have a CEL expression but no usable `query`; those open in
- * CEL mode so the expression stays visible and editable instead of being silently cleared.
- */
-function initialConditionMode(rule?: RoutingRule | null): ConditionMode {
-	if (!rule) {
-		return "builder";
-	}
-	const hasQuery = isValidRuleGroupType(rule.query) && (rule.query.rules?.length ?? 0) > 0;
-	if (hasQuery) {
-		return "builder";
-	}
-	return rule.cel_expression?.trim() ? "cel" : "builder";
-}
-
-// Lazy-load CEL builder (heavy dependency tree).
-const CELRuleBuilderLazy = lazy(() =>
-	import("@/app/workspace/routing-rules/components/celBuilder/celRuleBuilder").then((mod) => ({
-		default: mod.CELRuleBuilder,
-	})),
-);
-const CELRuleBuilder = (props: React.ComponentProps<typeof CELRuleBuilderLazy>) => {
-	const { t } = useTranslation("models");
-	return (
-		<Suspense fallback={<div className="text-sm text-gray-500">{t("routing.loadingCelBuilder")}</div>}>
-			<CELRuleBuilderLazy {...props} />
-		</Suspense>
-	);
-};
-
-function scopeNoun(scope: string, t: TFunction<"models">) {
-	if (scope === "team") return t("routing.team");
-	if (scope === "customer") return t("routing.customer");
-	if (scope === "user") return t("routing.user");
-	return t("routing.scopeVirtualKey");
-}
-
-const SCOPE_OPTION_KEYS: Partial<Record<string, ParseKeys<"models">>> = {
-	global: "routing.scopeGlobal",
-	team: "routing.scopeTeam",
-	customer: "routing.scopeCustomer",
-	virtual_key: "routing.scopeVirtualKey",
 };
 
 export function RoutingRuleSheet({ open, onOpenChange, editingRule, onSuccess }: RoutingRuleDialogProps) {
@@ -158,7 +111,6 @@ export function RoutingRuleSheet({ open, onOpenChange, editingRule, onSuccess }:
 
 	// Registered by the downstream build at module load; undefined in builds
 	// without a user directory, which hides the "User" scope option.
-	const UserPicker = getUserPicker();
 	const fallbacks = watch("fallbacks");
 	const ttftTimeoutInput = watch("ttft_timeout_ms");
 	const ttftDisplay = summarizeTTFTDisplay(editingRule?.targets, ttftTimeoutInput, ttftEdited);
@@ -456,32 +408,15 @@ export function RoutingRuleSheet({ open, onOpenChange, editingRule, onSuccess }:
 
 						{/* Scope and Priority - Side by Side */}
 						<div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-							<div className="space-y-3">
-								<Label htmlFor="scope">{t("routing.scope")}</Label>
-								<Select
-									value={scope}
-									onValueChange={(value) => {
-										setValue("scope", value as any);
-										// Clear scope_id when scope changes
-										setValue("scope_id", "");
-									}}
-								>
-									<SelectTrigger className="w-full">
-										<SelectValue placeholder={t("routing.selectScope")} />
-									</SelectTrigger>
-									<SelectContent>
-										{ROUTING_RULE_SCOPES.map((scopeOption) => {
-											const labelKey = SCOPE_OPTION_KEYS[scopeOption.value];
-											return (
-												<SelectItem key={scopeOption.value} value={scopeOption.value}>
-													{labelKey ? t(labelKey) : scopeOption.label}
-												</SelectItem>
-											);
-										})}
-										{(UserPicker || scope === "user") && <SelectItem value="user">{t("routing.user")}</SelectItem>}
-									</SelectContent>
-								</Select>
-							</div>
+							<RuleScopeSelect
+								id="scope"
+								value={scope}
+								onChange={(value) => {
+									setValue("scope", value as any);
+									// Clear scope_id when scope changes
+									setValue("scope_id", "");
+								}}
+							/>
 
 							<div className="space-y-3">
 								<Label htmlFor="priority">
@@ -505,33 +440,13 @@ export function RoutingRuleSheet({ open, onOpenChange, editingRule, onSuccess }:
 						</div>
 
 						{scope !== "global" && (
-							<div className="space-y-2">
-								<Label htmlFor="scope_id">
-									{scopeNoun(scope, t)} <span className="text-red-500">*</span>
-								</Label>
-								{/* A rule stores only its scope_id, so there is no name to seed
-								    these with — each selector resolves its own selection. */}
-								{scope === "team" && <TeamSelector value={scopeId || ""} onChange={(value) => setValue("scope_id", value)} />}
-								{scope === "customer" && <CustomerSelector value={scopeId || ""} onChange={(value) => setValue("scope_id", value)} />}
-								{scope === "virtual_key" && <VirtualKeySelector value={scopeId || ""} onChange={(value) => setValue("scope_id", value)} />}
-								{scope === "user" &&
-									(UserPicker ? (
-										<UserPicker value={scopeId || ""} onChange={(value) => setValue("scope_id", value)} />
-									) : (
-										// No user directory in this build: keep a plain input so
-										// existing user-scoped rules remain editable.
-										<Input
-											id="scope_id"
-											data-testid="routing-rule-scope-user-input"
-											placeholder={t("routing.governanceUserId")}
-											value={scopeId || ""}
-											onChange={(e) => setValue("scope_id", e.target.value)}
-										/>
-									))}
-								{/* Teams, customers and virtual keys are all searched lazily inside their
-								    selectors, each of which surfaces its own empty state. */}
-								{errors.scope_id && <p className="text-destructive text-sm">{errors.scope_id.message}</p>}
-							</div>
+							<RuleScopeEntityField
+								scope={scope}
+								value={scopeId || ""}
+								onChange={(value) => setValue("scope_id", value)}
+								error={errors.scope_id?.message}
+								userInputTestId="routing-rule-scope-user-input"
+							/>
 						)}
 
 						<Separator />
@@ -687,267 +602,5 @@ export function RoutingRuleSheet({ open, onOpenChange, editingRule, onSuccess }:
 				</form>
 			</SheetContent>
 		</Sheet>
-	);
-}
-
-interface ProviderKeySelectProps {
-	idPrefix: string;
-	clearLabel: string;
-	provider?: string;
-	keyId?: string;
-	allKeys: Array<{ key_id: string; name: string; provider: string }>;
-	onChange: (keyId: string) => void;
-}
-
-/** Renders nothing until a provider is chosen, since keys are scoped to one. */
-function ProviderKeySelect({ idPrefix, clearLabel, provider, keyId, allKeys, onChange }: ProviderKeySelectProps) {
-	const { t } = useTranslation("models");
-	const availableKeys = provider ? allKeys.filter((k) => k.provider === provider).map((k) => ({ id: k.key_id, name: k.name })) : [];
-	if (!provider || (availableKeys.length === 0 && !keyId)) {
-		return null;
-	}
-
-	return (
-		<div className="space-y-1.5">
-			<Label id={`${idPrefix}-apikey-label`} className="text-xs">
-				<Trans i18nKey="routing.apiKeyOptional" ns="models" components={{ muted: <span className="text-muted-foreground" /> }} />
-			</Label>
-			<div className="flex gap-1.5">
-				<Select value={keyId || ""} onValueChange={onChange}>
-					<SelectTrigger
-						id={`${idPrefix}-apikey-select`}
-						aria-labelledby={`${idPrefix}-apikey-label`}
-						className="h-9 flex-1 text-sm"
-						data-testid={`${idPrefix}-apikey-select`}
-					>
-						<SelectValue placeholder={t("routing.selectKeyOptional")} />
-					</SelectTrigger>
-					<SelectContent>
-						{availableKeys.map((key) => (
-							<SelectItem key={key.id} value={key.id}>
-								{key.name}
-							</SelectItem>
-						))}
-						{keyId && !availableKeys.some((k) => k.id === keyId) && (
-							<SelectItem key={`pinned-${keyId}`} value={keyId}>
-								{t("routing.pinnedKey", { id: keyId })}
-							</SelectItem>
-						)}
-					</SelectContent>
-				</Select>
-				{keyId && (
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						onClick={() => onChange("")}
-						className="h-9 w-9 p-0"
-						aria-label={clearLabel}
-						data-testid={`${idPrefix}-apikey-clear`}
-					>
-						<X className="h-3.5 w-3.5" />
-					</Button>
-				)}
-			</div>
-		</div>
-	);
-}
-
-interface FallbackRowProps {
-	fallback: RoutingFallbackFormData;
-	index: number;
-	referencedProviderOptions: ProviderSelectorOption[];
-	allKeys: Array<{ key_id: string; name: string; provider: string }>;
-	onUpdate: (index: number, changes: Partial<RoutingFallbackFormData>) => void;
-	onRemove: (index: number) => void;
-}
-
-function FallbackRow({ fallback, index, referencedProviderOptions, allKeys, onUpdate, onRemove }: FallbackRowProps) {
-	const { t } = useTranslation("models");
-	const provider = fallback.provider || "";
-
-	return (
-		<div className="space-y-2 rounded-lg border p-3" data-testid={`routing-fallback-${index}`}>
-			<div className="flex items-center gap-2">
-				<div className="flex-1">
-					<ProviderSelector
-						extraOptions={referencedProviderOptions}
-						value={provider}
-						// A key belongs to one provider, so switching providers invalidates the pin.
-						onChange={(value: string) => onUpdate(index, { provider: value, model: "", key_id: "" })}
-						placeholder={t("routing.selectProvider")}
-						className="!h-9 !min-h-9"
-						data-testid={`routing-fallback-${index}-provider-select`}
-						noPortal
-					/>
-				</div>
-				<div className="flex-1" data-testid={`routing-fallback-${index}-model-select`}>
-					<ModelSelector
-						provider={provider || undefined}
-						value={fallback.model || ""}
-						onChange={(value) => onUpdate(index, { model: value })}
-						placeholder={t("routing.incomingOptional")}
-						allowCustomModel
-						unfiltered={true}
-						disabled={!provider}
-						className="!h-9 !min-h-9 w-full"
-					/>
-				</div>
-				<Button
-					type="button"
-					variant="ghost"
-					size="sm"
-					onClick={() => onRemove(index)}
-					className="h-9 px-2"
-					aria-label={t("routing.removeFallback", { n: index + 1 })}
-					data-testid={`routing-fallback-${index}-remove-button`}
-				>
-					<Trash2 className="h-4 w-4" />
-				</Button>
-			</div>
-
-			<ProviderKeySelect
-				idPrefix={`routing-fallback-${index}`}
-				clearLabel={t("routing.clearFallbackApiKey", { n: index + 1 })}
-				provider={provider}
-				keyId={fallback.key_id}
-				allKeys={allKeys}
-				onChange={(value) => onUpdate(index, { key_id: value })}
-			/>
-		</div>
-	);
-}
-
-interface TargetRowProps {
-	target: RoutingTargetFormData;
-	index: number;
-	referencedProviderOptions: ProviderSelectorOption[];
-	allKeys: Array<{ key_id: string; name: string; provider: string }>;
-	showRemove: boolean;
-	onUpdate: (index: number, field: keyof RoutingTargetFormData, value: string | number) => void;
-	onRemove: (index: number) => void;
-}
-
-function TargetRow({ target, index, referencedProviderOptions, allKeys, showRemove, onUpdate, onRemove }: TargetRowProps) {
-	const { t } = useTranslation("models");
-	return (
-		<div className="space-y-3 rounded-lg border p-3" data-testid={`routing-target-${index}`}>
-			<div className="flex items-center justify-between">
-				<span className="text-muted-foreground text-sm font-medium">{t("routing.targetN", { n: index + 1 })}</span>
-				<div className="flex items-center gap-2">
-					<div className="flex items-center gap-1.5">
-						<Label htmlFor={`routing-target-${index}-weight-input`} className="text-muted-foreground shrink-0 text-xs">
-							{t("providers.weight")}
-						</Label>
-						<Input
-							id={`routing-target-${index}-weight-input`}
-							type="number"
-							min={0.001}
-							max={1}
-							step={0.001}
-							value={target.weight}
-							onChange={(e) => onUpdate(index, "weight", parseFloat(e.target.value) || 0)}
-							className="h-8 w-24 text-sm"
-							data-testid={`routing-target-${index}-weight-input`}
-						/>
-					</div>
-					{showRemove && (
-						<Button
-							type="button"
-							variant="ghost"
-							size="sm"
-							onClick={() => onRemove(index)}
-							className="h-8 w-8 p-0"
-							aria-label={t("routing.removeTarget", { n: index + 1 })}
-							data-testid={`routing-target-${index}-remove-button`}
-						>
-							<Trash2 className="h-3.5 w-3.5" />
-						</Button>
-					)}
-				</div>
-			</div>
-
-			<div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-				<div className="space-y-1.5">
-					<Label id={`routing-target-${index}-provider-label`} className="text-xs">
-						{t("modelCatalog.provider")}
-					</Label>
-					<div className="flex gap-1.5">
-						<ProviderSelector
-							extraOptions={referencedProviderOptions}
-							value={target.provider || ""}
-							onChange={(value: string) => {
-								onUpdate(index, "provider", value);
-								onUpdate(index, "model", "");
-								onUpdate(index, "key_id", "");
-							}}
-							placeholder={t("routing.incomingOptional")}
-							className="!h-9 !min-h-9 flex-1 text-sm"
-							data-testid={`routing-target-${index}-provider-select`}
-							noPortal
-						/>
-						{target.provider && (
-							<Button
-								type="button"
-								variant="outline"
-								size="sm"
-								onClick={() => {
-									onUpdate(index, "provider", "");
-									onUpdate(index, "model", "");
-									onUpdate(index, "key_id", "");
-								}}
-								className="h-9 w-9 p-0"
-								aria-label={t("routing.clearProvider", { n: index + 1 })}
-								data-testid={`routing-target-${index}-provider-clear`}
-							>
-								<X className="h-3.5 w-3.5" />
-							</Button>
-						)}
-					</div>
-				</div>
-
-				<div className="space-y-1.5">
-					<Label id={`routing-target-${index}-model-label`} className="text-xs">
-						{t("modelCatalog.model")}
-					</Label>
-					<div className="flex gap-1.5">
-						<div className="flex-1" data-testid={`routing-target-${index}-model-select`}>
-							<ModelSelector
-								provider={target.provider || undefined}
-								value={target.model}
-								onChange={(value) => onUpdate(index, "model", value)}
-								placeholder={t("routing.incomingOptional")}
-								allowCustomModel
-								className="!h-9 !min-h-9"
-								inputId={`routing-target-${index}-model-input`}
-								ariaLabelledBy={`routing-target-${index}-model-label`}
-							/>
-						</div>
-						{target.model && (
-							<Button
-								type="button"
-								variant="outline"
-								size="sm"
-								onClick={() => onUpdate(index, "model", "")}
-								className="h-9 w-9 p-0"
-								aria-label={t("routing.clearModel", { n: index + 1 })}
-								data-testid={`routing-target-${index}-model-clear`}
-							>
-								<X className="h-3.5 w-3.5" />
-							</Button>
-						)}
-					</div>
-				</div>
-			</div>
-
-			<ProviderKeySelect
-				idPrefix={`routing-target-${index}`}
-				clearLabel={t("routing.clearApiKey", { n: index + 1 })}
-				provider={target.provider}
-				keyId={target.key_id}
-				allKeys={allKeys}
-				onChange={(value) => onUpdate(index, "key_id", value)}
-			/>
-		</div>
 	);
 }

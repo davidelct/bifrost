@@ -70,7 +70,9 @@
 			"decision": "Modèle de décision",
 			"llm": "LLM",
 			"skipped": "Ignoré"
-		}
+		},
+		"modelRouter": "Routeur de modèles",
+		"modelRoutingRule": "Règle de routage de modèles"
 	},
 	"dashboard": {
 		"tabs": {
@@ -1233,7 +1235,10 @@
 		"exactRoundTripID": "ID d'aller-retour exact",
 		"nothingRecorded": "Aucune donnée enregistrée sur cette période",
 		"topics": "Sujets",
-		"searchTopics": "Rechercher des sujets"
+		"searchTopics": "Rechercher des sujets",
+		"modelRouters": "Routeurs de modèles",
+		"searchModelRouters": "Rechercher des routeurs",
+		"modelRoutingRules": "Règles de routage de modèles"
 	},
 	"requestTypes": {
 		"chat_completion": "Chat",

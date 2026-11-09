@@ -18,7 +18,7 @@
 		"modelProviders": "模型提供商",
 		"budgetsLimits": "预算与限额",
 		"routingRules": "路由规则",
-		"complexityRouter": "复杂度路由器",
+		"modelRouter": "模型路由器",
 		"circuitBreaker": "熔断器",
 		"pricingOverrides": "定价覆盖",
 		"modelSettings": "模型设置",

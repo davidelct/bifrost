@@ -73,6 +73,16 @@ logs:
         description: Comma-separated list of complexity decision mechanisms to filter by (semantic, decision, llm, session, or skipped)
         schema:
           type: string
+      - name: model_router_ids
+        in: query
+        description: Comma-separated list of model router IDs. Matches requests a model router classified for a model routing rule or a routing rule's complexity_tier.
+        schema:
+          type: string
+      - name: model_routing_rule_ids
+        in: query
+        description: Comma-separated list of model routing rule IDs. Matches requests that a model routing rule sent to its model router.
+        schema:
+          type: string
       - name: session_id
         in: query
         description: Exact Bifrost session ID used for key stickiness and request correlation
@@ -302,6 +312,16 @@ logs-stats:
       - name: complexity_mechanisms
         in: query
         description: Comma-separated list of complexity decision mechanisms to filter by (semantic, decision, llm, session, or skipped)
+        schema:
+          type: string
+      - name: model_router_ids
+        in: query
+        description: Comma-separated list of model router IDs. Matches requests a model router classified for a model routing rule or a routing rule's complexity_tier.
+        schema:
+          type: string
+      - name: model_routing_rule_ids
+        in: query
+        description: Comma-separated list of model routing rule IDs. Matches requests that a model routing rule sent to its model router.
         schema:
           type: string
       - name: session_id

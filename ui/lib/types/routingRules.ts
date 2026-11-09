@@ -4,6 +4,7 @@
  */
 
 import i18n from "@/lib/i18n";
+import type { DecisionTier } from "@/lib/types/complexityRouter";
 import type { ParseKeys } from "i18next";
 import { RuleGroupType } from "react-querybuilder";
 
@@ -66,6 +67,53 @@ export interface CreateRoutingRuleRequest {
 
 /** Partial update: only sent fields are applied; allows clearing fields by sending "" or []. */
 export type UpdateRoutingRuleRequest = Partial<CreateRoutingRuleRequest>;
+
+/** One model for one tier of a model routing rule. Omitting provider or model keeps the request's value. */
+export interface ModelRoutingTarget {
+	tier: DecisionTier;
+	provider?: string;
+	model?: string;
+	key_id?: string;
+	weight: number;
+	ttft_timeout_ms?: number;
+	/** Replaces the request's fallback chain when this target is chosen. */
+	fallbacks?: RoutingFallbackWire[];
+}
+
+/** Picks a model router for matching requests and maps the tier it decides to a model. */
+export interface ModelRoutingRule {
+	id: string;
+	name: string;
+	description: string;
+	enabled: boolean;
+	cel_expression: string;
+	query?: RuleGroupType;
+	model_router_id: string;
+	scope: RoutingRule["scope"];
+	scope_id?: string | null;
+	priority: number;
+	targets: ModelRoutingTarget[];
+	created_at: string;
+	updated_at: string;
+}
+
+export interface ModelRoutingRuleRequest {
+	name: string;
+	description?: string;
+	enabled?: boolean;
+	cel_expression?: string;
+	query?: RuleGroupType;
+	model_router_id: string;
+	scope: string;
+	scope_id?: string;
+	priority: number;
+	targets: ModelRoutingTarget[];
+}
+
+export interface ModelRoutingRuleList {
+	rules: ModelRoutingRule[];
+	count: number;
+}
 
 export interface GetRoutingRulesParams {
 	limit?: number;

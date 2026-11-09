@@ -1892,6 +1892,49 @@ bifrost:
   #         path: "/"
   #         headers: { X-Amz-Target: "Textract.AnalyzeDocument" }
 
+  # Model routers: named complexity classifiers that model routing rules reference by id. Each entry
+  # takes id, name and description plus the settings of governance.complexityAnalyzerConfig
+  # (keywords, classifier, semantic, decision, llm, session, suggestions, tier_boundaries).
+  # Rendered as top-level `model_routers` in config.json when non-empty. The entry with id "default"
+  # configures the default router; while this list is set, governance.complexityAnalyzerConfig is ignored.
+  # modelRouters:
+  #   - id: "support"                    # letters, digits, _ and - (max 64); "default" is the default router
+  #     name: "Support"                  # unique across routers; "Default" is reserved
+  #     description: "Classifies support traffic"
+  #     classifier: "decision"           # semantic (default) | decision
+  #     decision:
+  #       provider: "typesafe"
+  #       model: "jev-latest"
+  #     keywords:                        # required, as in governance.complexityAnalyzerConfig
+  #       simple_keywords: ["how do I reset my password?"]
+  #       medium_keywords: ["why is my invoice higher than last month?"]
+  #       complex_keywords: ["plan a zero-downtime migration of our SSO setup."]
+
+  # Model routing rules: matched after governance.routingRules. The first rule that matches names a
+  # model router, the router classifies the request as SIMPLE, MEDIUM or COMPLEX, and that tier's
+  # target replaces the provider and model. Rendered as top-level `model_routing_rules` when non-empty.
+  # modelRoutingRules:
+  #   - id: "support-tiers"
+  #     name: "Support tiers"
+  #     enabled: true
+  #     cel_expression: "model.startsWith('gpt-')"  # Optional; empty matches every request in scope. Cannot use complexity_tier
+  #     model_router_id: "support"       # "default" is the default router
+  #     scope: "global"                  # global, team, customer, virtual_key
+  #     # scope_id: "team-1"             # Required for non-global scopes: the entity's ID, not its name
+  #     priority: 0                      # Lower = evaluated first; unique within the scope among model routing rules
+  #     targets:                         # A tier with no target keeps the request's model; weights within a tier sum to 1
+  #       - tier: "SIMPLE"
+  #         provider: "openai"
+  #         model: "gpt-4o-mini"
+  #         weight: 1
+  #       - tier: "COMPLEX"
+  #         provider: "anthropic"
+  #         model: "claude-sonnet-4-5"
+  #         weight: 1
+  #         # key_id: "<key-id>"         # Optional key pin; requires provider
+  #         # ttft_timeout_ms: 5000      # Optional streaming first-token deadline
+  #         # fallbacks: ["openai/gpt-4o"]  # Replaces the request's fallback chain when this target is chosen
+
   # Audit logs configuration for CADF-compliant activity logging
   auditLogs:
     disabled: false

@@ -3244,7 +3244,8 @@
                       "additionalProperties": false
                     }
                   ]
-                }
+                },
+                "suggestions": { "$ref": "#/$defs/complexitySuggestionsConfig" }
               },
               "allOf": [
                 {
@@ -5313,6 +5314,20 @@
             "$ref": "#/$defs/relay"
           }
         },
+        "modelRouters": {
+          "type": "array",
+          "description": "Named model routers, each a complexity classifier with the settings of governance.complexityAnalyzerConfig. Rendered as top-level model_routers in config.json when non-empty. The entry with id \"default\" configures the default router; while model_routers is present, governance.complexity_analyzer_config is ignored.",
+          "items": {
+            "$ref": "#/$defs/modelRouter"
+          }
+        },
+        "modelRoutingRules": {
+          "type": "array",
+          "description": "Model routing rules, matched after the routing rules: the first that matches names a model router, the router classifies the request into SIMPLE, MEDIUM or COMPLEX, and that tier's target replaces the provider and model. Rendered as top-level model_routing_rules in config.json when non-empty.",
+          "items": {
+            "$ref": "#/$defs/modelRoutingRule"
+          }
+        },
         "agents": {
           "type": "array",
           "description": "Declarative A2A agent registrations synced into the database at startup, reconciled by name with hash-based change detection. Rendered directly as top-level agents in config.json. In config.json source-of-truth mode, stored registrations absent from this list are pruned.",
@@ -6995,6 +7010,130 @@
     }
   },
   "$defs": {
+    "modelRouter": {
+      "type": "object",
+      "description": "One model router: an id, a name and a description beside the settings of governance.complexityAnalyzerConfig, whose definitions these properties reuse.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "description": "Stable router id that model routing rules reference. \"default\" is the default router."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "description": "Display name, unique across routers. \"Default\" is reserved for the default router."
+        },
+        "description": {
+          "type": "string",
+          "description": "What the router is for."
+        },
+        "classifier": {"$ref": "#/properties/bifrost/properties/governance/properties/complexityAnalyzerConfig/properties/classifier"},
+        "decision": {"$ref": "#/properties/bifrost/properties/governance/properties/complexityAnalyzerConfig/properties/decision"},
+        "semantic": {"$ref": "#/properties/bifrost/properties/governance/properties/complexityAnalyzerConfig/properties/semantic"},
+        "llm": {"$ref": "#/properties/bifrost/properties/governance/properties/complexityAnalyzerConfig/properties/llm"},
+        "session": {"$ref": "#/properties/bifrost/properties/governance/properties/complexityAnalyzerConfig/properties/session"},
+        "tier_boundaries": {"$ref": "#/properties/bifrost/properties/governance/properties/complexityAnalyzerConfig/properties/tier_boundaries"},
+        "keywords": {"$ref": "#/properties/bifrost/properties/governance/properties/complexityAnalyzerConfig/properties/keywords"},
+        "suggestions": {"$ref": "#/$defs/complexitySuggestionsConfig"}
+      },
+      "required": ["id", "name", "keywords"],
+      "$comment": "The same cross-field rules as complexityAnalyzerConfig: session.enabled needs semantic unless the decision model is primary, and semantic.fallback llm needs llm.",
+      "allOf": [
+        {"$ref": "#/properties/bifrost/properties/governance/properties/complexityAnalyzerConfig/allOf/0"},
+        {"$ref": "#/properties/bifrost/properties/governance/properties/complexityAnalyzerConfig/allOf/1"}
+      ],
+      "additionalProperties": false
+    },
+    "complexitySuggestionsConfig": {
+      "type": "object",
+      "description": "Phrase suggestions for the semantic router: a sample of the vectors the semantic classifier computes is kept under each request's log ID so suggestions can cluster real traffic. Request text stays in the logs.",
+      "properties": {
+        "enabled": {"type": "boolean", "description": "Capture a sample of classified requests for phrase suggestions; default false."},
+        "sample_rate": {"type": "number", "exclusiveMinimum": 0, "maximum": 1, "description": "Share of classified requests captured; default 0.1."},
+        "lookback_days": {"type": "integer", "minimum": 1, "maximum": 90, "description": "Days of captured traffic suggestions draw on, and how long captured vectors are kept (never longer than the logs); default 7."},
+        "schedule": {
+          "type": "object",
+          "description": "When suggestion runs start: at start_at and every interval after it. Default: daily at 03:00 UTC.",
+          "properties": {
+            "every": {"type": "string", "pattern": "^([1-9]|1[0-9]|2[0-3])h$|^([1-9]|[12][0-9]|30)d$|^[1-4]w$", "description": "Interval: 1h-23h, 1d-30d or 1w-4w, as a fixed duration. Default 1d."},
+            "start_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$", "description": "The first run, an RFC 3339 time such as 2026-11-12T03:00:00Z; runs repeat every interval from it. Default 1970-01-01T03:00:00Z."}
+          },
+          "additionalProperties": false
+        },
+        "max_clustered_requests": {"type": "integer", "minimum": 1000, "maximum": 100000, "description": "Most captured requests one run clusters; default 20000."},
+        "min_cluster_requests": {"type": "integer", "minimum": 2, "maximum": 1000, "description": "Smallest cluster, in requests, a suggestion is written for; default 6."},
+        "provider": {"type": "string", "minLength": 1, "description": "Provider of the model that writes suggestions. Set together with model; both omitted use the llm block's model."},
+        "model": {"type": "string", "minLength": 1, "description": "Model that writes suggestions. Set together with provider; both omitted use the llm block's model."},
+        "instructions": {"type": "string", "maxLength": 8000, "description": "Replaces the shipped suggestion instructions; empty uses them."}
+      },
+      "dependentRequired": {"provider": ["model"], "model": ["provider"]},
+      "required": ["enabled"],
+      "additionalProperties": false
+    },
+    "modelRoutingRule": {
+      "type": "object",
+      "description": "One model routing rule: which requests a model router classifies, and the model each tier gets.",
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "description": "Stable rule id."},
+        "name": {"type": "string", "minLength": 1, "description": "Rule name, unique within its scope."},
+        "description": {"type": "string"},
+        "enabled": {"type": "boolean", "default": true},
+        "cel_expression": {
+          "type": "string",
+          "description": "Optional CEL condition over the request as the routing rules left it. Empty matches every request in the rule's scope. It cannot use complexity_tier: the rule's router decides the tier after the rule matches."
+        },
+        "query": {"$ref": "#/properties/bifrost/properties/governance/properties/routingRules/items/properties/query"},
+        "model_router_id": {"type": "string", "minLength": 1, "description": "The model router that classifies the request. \"default\" is the default router."},
+        "scope": {
+          "type": "string",
+          "enum": ["global", "team", "customer", "virtual_key"],
+          "default": "global",
+          "description": "Rule scope level. User-scoped rules can be created through the API only. A rule whose scope_id does not resolve is skipped at load with a warning."
+        },
+        "scope_id": {
+          "type": ["string", "null"],
+          "description": "ID (not name) of the team, customer or virtual key. Required for non-global scopes; ignored for global."
+        },
+        "priority": {
+          "type": "integer",
+          "description": "Evaluation order within the rule's scope; lower runs first. Unique within the scope among model routing rules, separate from routing rule priorities."
+        },
+        "targets": {
+          "type": "array",
+          "minItems": 1,
+          "description": "The model each tier gets. A tier with no target keeps the request's model; weights within a tier sum to 1.",
+          "items": {"$ref": "#/$defs/modelRoutingTarget"}
+        }
+      },
+      "required": ["id", "name", "model_router_id", "targets"],
+      "additionalProperties": false
+    },
+    "modelRoutingTarget": {
+      "type": "object",
+      "description": "One model for one tier of a model routing rule. Omitting provider or model keeps the request's value.",
+      "properties": {
+        "tier": {"type": "string", "enum": ["SIMPLE", "MEDIUM", "COMPLEX"]},
+        "provider": {"type": "string", "minLength": 1, "description": "Target provider name. Omit to keep the request's provider."},
+        "model": {"type": "string", "minLength": 1, "description": "Target model name. Omit to keep the request's model."},
+        "key_id": {"type": "string", "minLength": 1, "description": "Optional provider key ID to pin for this target. Requires provider."},
+        "weight": {"type": "number", "exclusiveMinimum": 0, "maximum": 1, "description": "Probability weight within the tier (must be > 0). All weights in a tier must sum to 1."},
+        "ttft_timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300000,
+          "description": "Time-to-first-token deadline in milliseconds for streaming requests routed to this target. A slow attempt is cut off and the next fallback runs; the last attempt never is. Omit to disable."
+        },
+        "fallbacks": {
+          "$ref": "#/properties/bifrost/properties/governance/properties/routingRules/items/properties/fallbacks",
+          "description": "Fallback chain used when this target is chosen; it replaces the request's chain. Omit to keep the chain the routing rules set."
+        }
+      },
+      "required": ["tier", "weight"],
+      "dependentRequired": {"key_id": ["provider"]},
+      "additionalProperties": false
+    },
     "identity_source": {
       "type": "object",
       "description": "Where a federated key gets the OIDC identity token it exchanges. Shared by every provider that supports workload identity federation.",

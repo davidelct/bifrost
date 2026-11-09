@@ -294,11 +294,12 @@ export function useNavItems(): NavItem[] {
 						hasAccess: hasRoutingRulesAccess,
 					},
 					{
-						id: "models.complexity-router",
-						title: t("nav.complexityRouter"),
-						url: "/workspace/complexity-router",
+						id: "models.model-routers",
+						title: t("nav.modelRouter"),
+						url: "/workspace/model-routers",
 						icon: GitCompareArrows,
-						hasAccess: hasRoutingRulesAccess,
+						// The model router APIs are gated on Governance.
+						hasAccess: hasGovernanceLegacyAccess,
 					},
 					{
 						id: "models.circuit-breaker",

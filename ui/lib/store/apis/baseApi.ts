@@ -214,6 +214,8 @@ export const baseApi = createApi({
 		"MCPLibrary",
 		"FeatureFlags",
 		"ComplexityAnalyzerConfig",
+		"ModelRouters",
+		"ModelRoutingRules",
 		"ComplexitySuggestions",
 		"Skills",
 		"OAuth2Grants",

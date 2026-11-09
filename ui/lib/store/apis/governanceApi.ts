@@ -43,7 +43,8 @@ import {
 	VirtualKey,
 } from "@/lib/types/governance";
 import {
-	AnalyzerConfig,
+	ModelRouter,
+	ModelRouterList,
 	PhraseTestRequest,
 	PhraseTestResult,
 	SemanticStatusInfo,
@@ -56,6 +57,7 @@ import {
 	SuggestionsList,
 	SuggestionStatus,
 } from "@/lib/types/complexityRouter";
+import { ModelRoutingRule, ModelRoutingRuleList, ModelRoutingRuleRequest } from "@/lib/types/routingRules";
 import { baseApi } from "./baseApi";
 
 type PricingOverrideQueryArgs = {
@@ -869,47 +871,63 @@ export const governanceApi = baseApi.injectEndpoints({
 			},
 		}),
 
-		// Complexity Analyzer Config
-		getComplexityAnalyzerConfig: builder.query<AnalyzerConfig, void>({
-			query: () => ({
-				url: "/routing/complexity-analyzer-config",
-				method: "GET",
-			}),
-			providesTags: ["ComplexityAnalyzerConfig"],
+		// Model routers. Each router is the complexity analyzer config plus an
+		// identity. The legacy analyzer config endpoint edits the default router,
+		// so its tag refreshes these too.
+		getModelRouters: builder.query<ModelRouterList, void>({
+			query: () => ({ url: "/routing/model-routers", method: "GET" }),
+			providesTags: ["ModelRouters", "ComplexityAnalyzerConfig"],
+		}),
+		getModelRouter: builder.query<ModelRouter, string>({
+			query: (id) => ({ url: `/routing/model-routers/${encodeURIComponent(id)}`, method: "GET" }),
+			providesTags: ["ModelRouters", "ComplexityAnalyzerConfig"],
+		}),
+		createModelRouter: builder.mutation<ModelRouter, Omit<ModelRouter, "id"> & { id?: string }>({
+			query: (body) => ({ url: "/routing/model-routers", method: "POST", body }),
+			invalidatesTags: ["ModelRouters"],
+		}),
+		// A save changes whether suggestions run, so their tag is refreshed too.
+		updateModelRouter: builder.mutation<ModelRouter, ModelRouter>({
+			query: ({ id, ...body }) => ({ url: `/routing/model-routers/${encodeURIComponent(id)}`, method: "PUT", body }),
+			invalidatesTags: ["ModelRouters", "ComplexityAnalyzerConfig"],
+		}),
+		deleteModelRouter: builder.mutation<void, string>({
+			query: (id) => ({ url: `/routing/model-routers/${encodeURIComponent(id)}`, method: "DELETE" }),
+			invalidatesTags: ["ModelRouters", "ComplexitySuggestions"],
+		}),
+		resetModelRouter: builder.mutation<ModelRouter, string>({
+			query: (id) => ({ url: `/routing/model-routers/${encodeURIComponent(id)}/reset`, method: "POST" }),
+			invalidatesTags: ["ModelRouters", "ComplexityAnalyzerConfig"],
+		}),
+		// Readiness is derived from the saved configuration — a save or a reset
+		// restarts warmup — so it has to be invalidated by the same tag, or the
+		// page keeps showing the state the classifier was in before the edit.
+		getModelRouterStatus: builder.query<SemanticStatusInfo, string>({
+			query: (id) => ({ url: `/routing/model-routers/${encodeURIComponent(id)}/status`, method: "GET" }),
+			providesTags: ["ModelRouters", "ComplexityAnalyzerConfig"],
+		}),
+		retryModelRouterWarmup: builder.mutation<SemanticStatusInfo, string>({
+			query: (id) => ({ url: `/routing/model-routers/${encodeURIComponent(id)}/status/retry`, method: "POST" }),
+			invalidatesTags: ["ModelRouters"],
 		}),
 
-		updateComplexityAnalyzerConfig: builder.mutation<AnalyzerConfig, AnalyzerConfig>({
-			query: (data) => ({
-				url: "/routing/complexity-analyzer-config",
-				method: "PUT",
-				body: data,
-			}),
-			invalidatesTags: ["ComplexityAnalyzerConfig"],
+		// Model routing rules: which requests a model router classifies, and the
+		// model each tier gets.
+		getModelRoutingRules: builder.query<ModelRoutingRuleList, void>({
+			query: () => ({ url: "/routing/model-routing-rules", method: "GET" }),
+			providesTags: ["ModelRoutingRules"],
 		}),
-
-		getComplexitySemanticStatus: builder.query<SemanticStatusInfo, void>({
-			query: () => ({
-				url: "/routing/complexity-analyzer-status",
-				method: "GET",
-			}),
-			// Readiness is derived from the saved configuration — a save or a reset
-			// restarts warmup — so it has to be invalidated by the same tag, or the
-			// page keeps showing the state the classifier was in before the edit.
-			providesTags: ["ComplexityAnalyzerConfig"],
+		createModelRoutingRule: builder.mutation<ModelRoutingRule, ModelRoutingRuleRequest>({
+			query: (body) => ({ url: "/routing/model-routing-rules", method: "POST", body }),
+			invalidatesTags: ["ModelRoutingRules"],
 		}),
-		retryComplexitySemanticWarmup: builder.mutation<SemanticStatusInfo, void>({
-			query: () => ({
-				url: "/routing/complexity-analyzer-status/retry",
-				method: "POST",
-			}),
-			invalidatesTags: ["ComplexityAnalyzerConfig"],
+		updateModelRoutingRule: builder.mutation<ModelRoutingRule, { id: string; data: ModelRoutingRuleRequest }>({
+			query: ({ id, data }) => ({ url: `/routing/model-routing-rules/${encodeURIComponent(id)}`, method: "PUT", body: data }),
+			invalidatesTags: ["ModelRoutingRules"],
 		}),
-		resetComplexityAnalyzerConfig: builder.mutation<AnalyzerConfig, void>({
-			query: () => ({
-				url: "/routing/complexity-analyzer-config/reset",
-				method: "POST",
-			}),
-			invalidatesTags: ["ComplexityAnalyzerConfig"],
+		deleteModelRoutingRule: builder.mutation<void, string>({
+			query: (id) => ({ url: `/routing/model-routing-rules/${encodeURIComponent(id)}`, method: "DELETE" }),
+			invalidatesTags: ["ModelRoutingRules"],
 		}),
 
 		// Phrase suggestions. Every call is about one router; routerId defaults
@@ -1041,12 +1059,21 @@ export const {
 	useUpdateProviderGovernanceMutation,
 	useDeleteProviderGovernanceMutation,
 
-	// Complexity Analyzer Config
-	useGetComplexityAnalyzerConfigQuery,
-	useUpdateComplexityAnalyzerConfigMutation,
-	useResetComplexityAnalyzerConfigMutation,
-	useGetComplexitySemanticStatusQuery,
-	useRetryComplexitySemanticWarmupMutation,
+	// Model routers and model routing rules
+	useGetModelRoutersQuery,
+	useGetModelRouterQuery,
+	useCreateModelRouterMutation,
+	useUpdateModelRouterMutation,
+	useDeleteModelRouterMutation,
+	useResetModelRouterMutation,
+	useGetModelRouterStatusQuery,
+	useRetryModelRouterWarmupMutation,
+	useGetModelRoutingRulesQuery,
+	useCreateModelRoutingRuleMutation,
+	useUpdateModelRoutingRuleMutation,
+	useDeleteModelRoutingRuleMutation,
+
+	// Phrase suggestions
 	useGetComplexitySuggestionsQuery,
 	useGetComplexitySuggestionQuery,
 	useUpdateComplexitySuggestionStatusMutation,

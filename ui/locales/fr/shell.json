@@ -16,7 +16,7 @@
 		"modelProviders": "Fournisseurs de modèles",
 		"budgetsLimits": "Budgets et limites",
 		"routingRules": "Règles de routage",
-		"complexityRouter": "Routeur de complexité",
+		"modelRouter": "Routeur de modèles",
 		"circuitBreaker": "Disjoncteur",
 		"pricingOverrides": "Remplacements de tarification",
 		"modelSettings": "Paramètres des modèles",

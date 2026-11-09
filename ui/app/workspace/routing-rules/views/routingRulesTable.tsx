@@ -3,19 +3,8 @@
  * Displays all routing rules with CRUD actions
  */
 
-import {
-	AlertDialog,
-	AlertDialogAction,
-	AlertDialogCancel,
-	AlertDialogContent,
-	AlertDialogDescription,
-	AlertDialogFooter,
-	AlertDialogHeader,
-	AlertDialogTitle,
-} from "@/components/ui/alertDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdownMenu";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -27,74 +16,12 @@ import { useDeleteRoutingRuleMutation, useUpdateRoutingRuleMutation } from "@/li
 import { RoutingRule, RoutingTarget } from "@/lib/types/routingRules";
 import { getScopeLabel } from "@/lib/utils/labels";
 import { getPriorityBadgeClass, truncateCELExpression } from "@/lib/utils/routingRules";
-import { ChevronLeft, ChevronRight, Edit, MoreHorizontal, Search, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { getLocale } from "@/lib/i18n";
-
-function RoutingRuleActionsMenu({
-	rule,
-	canUpdate,
-	canDelete,
-	onEdit,
-	onDelete,
-}: {
-	rule: RoutingRule;
-	canUpdate: boolean;
-	canDelete: boolean;
-	onEdit: (rule: RoutingRule) => void;
-	onDelete: (ruleId: string) => void;
-}) {
-	const { t: tc } = useTranslation("common");
-	const { t } = useTranslation("models");
-	const [isOpen, setIsOpen] = useState(false);
-
-	return (
-		<DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-			<DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-				<Button
-					variant="ghost"
-					size="icon"
-					className="h-8 w-8"
-					aria-label={t("routing.actionsAria", { name: rule.name })}
-					data-testid={`routing-rule-actions-${rule.id}-btn`}
-				>
-					<MoreHorizontal className="h-4 w-4" />
-				</Button>
-			</DropdownMenuTrigger>
-			<DropdownMenuContent align="end">
-				<DropdownMenuItem
-					className="cursor-pointer"
-					disabled={!canUpdate}
-					data-testid={`routing-rule-edit-${rule.id}-btn`}
-					onSelect={(e) => {
-						e.preventDefault();
-						onEdit(rule);
-						setIsOpen(false);
-					}}
-				>
-					<Edit className="h-4 w-4" />
-					{tc("edit")}
-				</DropdownMenuItem>
-				<DropdownMenuItem
-					variant="destructive"
-					className="cursor-pointer"
-					disabled={!canDelete}
-					data-testid={`routing-rule-delete-${rule.id}-btn`}
-					onSelect={(e) => {
-						e.preventDefault();
-						onDelete(rule.id);
-						setIsOpen(false);
-					}}
-				>
-					<Trash2 className="h-4 w-4" />
-					{tc("delete")}
-				</DropdownMenuItem>
-			</DropdownMenuContent>
-		</DropdownMenu>
-	);
-}
+import { DeleteRuleDialog, RuleActionsMenu } from "./ruleShared";
 
 interface RoutingRulesTableProps {
 	rules: RoutingRule[] | undefined;
@@ -131,7 +58,6 @@ export function RoutingRulesTable({
 	actions,
 }: RoutingRulesTableProps) {
 	const { t } = useTranslation("models");
-	const { t: tc } = useTranslation("common");
 	const [deleteRuleId, setDeleteRuleId] = useState<string | null>(null);
 	const [deleteRoutingRule, { isLoading: isDeleting }] = useDeleteRoutingRuleMutation();
 	const [updateRoutingRule] = useUpdateRoutingRuleMutation();
@@ -279,12 +205,14 @@ export function RoutingRulesTable({
 										onClick={(e) => e.stopPropagation()}
 									>
 										<div className="flex items-center justify-center">
-											<RoutingRuleActionsMenu
-												rule={rule}
+											<RuleActionsMenu
+												id={rule.id}
+												name={rule.name}
+												testIdPrefix="routing-rule"
 												canUpdate={canUpdate}
 												canDelete={canDelete}
-												onEdit={onEdit}
-												onDelete={setDeleteRuleId}
+												onEdit={() => onEdit(rule)}
+												onDelete={() => setDeleteRuleId(rule.id)}
 											/>
 										</div>
 									</TableCell>
@@ -338,20 +266,14 @@ export function RoutingRulesTable({
 				</div>
 			)}
 
-			<AlertDialog open={!!deleteRuleId} onOpenChange={(open) => !open && setDeleteRuleId(null)}>
-				<AlertDialogContent>
-					<AlertDialogHeader>
-						<AlertDialogTitle>{t("routing.deleteTitle")}</AlertDialogTitle>
-						<AlertDialogDescription>{t("routing.deleteConfirm", { name: ruleToDelete?.name })}</AlertDialogDescription>
-					</AlertDialogHeader>
-					<AlertDialogFooter>
-						<AlertDialogCancel disabled={isDeleting}>{tc("cancel")}</AlertDialogCancel>
-						<AlertDialogAction onClick={handleDelete} disabled={isDeleting} className="bg-destructive hover:bg-destructive/90">
-							{isDeleting ? t("routing.deleting") : tc("delete")}
-						</AlertDialogAction>
-					</AlertDialogFooter>
-				</AlertDialogContent>
-			</AlertDialog>
+			<DeleteRuleDialog
+				open={!!deleteRuleId}
+				onOpenChange={(open) => !open && setDeleteRuleId(null)}
+				title={t("routing.deleteTitle")}
+				description={t("routing.deleteConfirm", { name: ruleToDelete?.name })}
+				isDeleting={isDeleting}
+				onConfirm={handleDelete}
+			/>
 		</>
 	);
 }

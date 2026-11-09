@@ -70,7 +70,9 @@
 			"decision": "Decision model",
 			"llm": "LLM",
 			"skipped": "Skipped"
-		}
+		},
+		"modelRouter": "Model Router",
+		"modelRoutingRule": "Model Routing Rule"
 	},
 	"dashboard": {
 		"tabs": {
@@ -1233,7 +1235,10 @@
 		"exactRoundTripID": "Exact round trip ID",
 		"nothingRecorded": "Nothing recorded in this time range",
 		"topics": "Topics",
-		"searchTopics": "Search topics"
+		"searchTopics": "Search topics",
+		"modelRouters": "Model Routers",
+		"searchModelRouters": "Search routers",
+		"modelRoutingRules": "Model Routing Rules"
 	},
 	"requestTypes": {
 		"chat_completion": "Chat",
