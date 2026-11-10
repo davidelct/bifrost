@@ -280,19 +280,26 @@ func (provider *DatabricksProvider) authHeader(ctx context.Context, key schemas.
 // configuration. Databricks requires a scope on every token request (none at all is a 400
 // invalid_scope) and refuses, with a 403 access_denied, any request naming a scope the secret
 // lacks, even alongside one it has. The default all-apis covers every secret created without
-// scopes. A scoped secret is refused it, so the scopes that can serve Bifrost's calls are tried
-// one at a time: model-serving-inference queries serving endpoints, model-serving also does,
-// and ai-functions serves decisions. Read-only variants (all-apis:read,
-// model-serving-inference:read) are deliberately absent: Databricks refuses every serving
-// endpoint query with them, so minting one would only move the failure to each request.
+// scopes. A scoped secret is refused it, so the scopes Bifrost's wire paths accept are tried,
+// as observed against a live workspace:
+//
+//   - model-serving: /serving-endpoints/chat/completions, /responses and /embeddings
+//   - ai-gateway: /ai-gateway/mlflow/v1/...
+//   - ai-functions: /api/2.0/ai-functions/ai-decide
+//
+// The pair comes first so a secret holding both surfaces gets one token for both; a denied
+// pair falls through to the singles. model-serving-inference is deliberately absent: it only
+// covers /serving-endpoints/{name}/invocations, which Bifrost does not call, so its token is
+// refused on every Bifrost path. Read-only variants (all-apis:read) are absent for the same
+// reason.
 var oauthScopeFallbacks = tokencache.ScopeFallbacks{
-	Sets:      [][]string{{"model-serving-inference"}, {"model-serving"}, {"ai-functions"}},
+	Sets:      [][]string{{"model-serving", "ai-gateway"}, {"model-serving"}, {"ai-gateway"}, {"ai-functions"}},
 	Denied:    isScopeDenied,
 	Exhausted: noUsableScopeError,
 }
 
 // oauthUsableScopes names the scopes Bifrost tries, for the error a secret with none of them gets.
-const oauthUsableScopes = "all-apis, model-serving-inference, model-serving or ai-functions"
+const oauthUsableScopes = "all-apis, model-serving, ai-gateway or ai-functions; model-serving-inference only covers /invocations, which Bifrost does not call"
 
 // isScopeDenied reports whether a failed mint is the token endpoint refusing the requested
 // scopes: a 403 whose OAuth error code (the first word of the forwarded detail) is

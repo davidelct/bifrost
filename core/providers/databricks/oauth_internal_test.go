@@ -149,11 +149,11 @@ func TestOAuthM2MScopedSecret(t *testing.T) {
 		wantBearers bool
 	}{
 		{
-			name:        "model-serving-inference secret",
-			granted:     "model-serving-inference",
+			name:        "model-serving and ai-gateway secret gets one token for both",
+			granted:     "model-serving ai-gateway",
 			status:      http.StatusForbidden,
 			refusal:     `{"error":"access_denied","error_description":"Scopes 'all-apis' are not assigned to the client sp-client-id"}`,
-			wantScopes:  []string{"all-apis", "model-serving-inference"},
+			wantScopes:  []string{"all-apis", "model-serving ai-gateway"},
 			wantBearers: true,
 		},
 		{
@@ -161,16 +161,33 @@ func TestOAuthM2MScopedSecret(t *testing.T) {
 			granted:     "model-serving",
 			status:      http.StatusForbidden,
 			refusal:     `{"error":"access_denied","error_description":"Scopes 'all-apis' are not assigned to the client sp-client-id"}`,
-			wantScopes:  []string{"all-apis", "model-serving-inference", "model-serving"},
+			wantScopes:  []string{"all-apis", "model-serving ai-gateway", "model-serving"},
 			wantBearers: true,
+		},
+		{
+			name:        "ai-gateway secret",
+			granted:     "ai-gateway",
+			status:      http.StatusForbidden,
+			refusal:     `{"error":"access_denied","error_description":"Scopes 'all-apis' are not assigned to the client sp-client-id"}`,
+			wantScopes:  []string{"all-apis", "model-serving ai-gateway", "model-serving", "ai-gateway"},
+			wantBearers: true,
+		},
+		{
+			// model-serving-inference only covers /invocations, which Bifrost does not call.
+			name:       "model-serving-inference secret is never minted and fails naming the scopes Bifrost needs",
+			granted:    "model-serving-inference",
+			status:     http.StatusForbidden,
+			refusal:    `{"error":"access_denied","error_description":"Scopes 'all-apis' are not assigned to the client sp-client-id"}`,
+			wantScopes: []string{"all-apis", "model-serving ai-gateway", "model-serving", "ai-gateway", "ai-functions"},
+			wantErr:    []string{"none of the OAuth scopes Bifrost can serve requests with", "model-serving-inference only covers /invocations"},
 		},
 		{
 			name:       "read-only secret fails at the mint naming the scopes Bifrost needs",
 			granted:    "all-apis:read",
 			status:     http.StatusForbidden,
 			refusal:    `{"error":"access_denied","error_description":"Scopes 'all-apis' are not assigned to the client sp-client-id; the client has scope(s) [all-apis:read] that cannot send this request"}`,
-			wantScopes: []string{"all-apis", "model-serving-inference", "model-serving", "ai-functions"},
-			wantErr:    []string{"none of the OAuth scopes Bifrost can serve requests with", "model-serving-inference", "the client has scope(s) [all-apis:read]"},
+			wantScopes: []string{"all-apis", "model-serving ai-gateway", "model-serving", "ai-gateway", "ai-functions"},
+			wantErr:    []string{"none of the OAuth scopes Bifrost can serve requests with", "model-serving, ai-gateway", "the client has scope(s) [all-apis:read]"},
 		},
 		{
 			name:       "a rejected client secret is not retried",
@@ -339,11 +356,12 @@ func TestChatStreamOptionsFixup(t *testing.T) {
 // then the workspace REST error_code/message pair, then a status-bearing generic.
 func TestParseDatabricksError(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		status  int
-		body    string
-		message string
-		code    string
+		name        string
+		status      int
+		contentType string
+		body        string
+		message     string
+		code        string
 	}{
 		{
 			name:    "workspace rest shape",
@@ -372,12 +390,31 @@ func TestParseDatabricksError(t *testing.T) {
 			body:    `{"something_else":true}`,
 			message: "provider API error (status 418)",
 		},
+		{
+			// As a live workspace answers a token whose scopes do not cover the path.
+			name:        "a plain-text scope error sent as text/html keeps its text",
+			status:      403,
+			contentType: "text/html; charset=utf-8",
+			body:        "Invalid scope, required scopes: model-serving",
+			message:     "Invalid scope, required scopes: model-serving",
+		},
+		{
+			name:        "a real html page keeps the generic html message",
+			status:      502,
+			contentType: "text/html; charset=utf-8",
+			body:        "<html><head><title>Bad Gateway</title></head><body><h1>Bad Gateway</h1></body></html>",
+			message:     schemas.ErrProviderResponseHTML,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resp := fasthttp.AcquireResponse()
 			defer fasthttp.ReleaseResponse(resp)
 			resp.SetStatusCode(tc.status)
-			resp.Header.SetContentType("application/json")
+			contentType := tc.contentType
+			if contentType == "" {
+				contentType = "application/json"
+			}
+			resp.Header.SetContentType(contentType)
 			resp.SetBodyString(tc.body)
 
 			bErr := parseDatabricksError(resp)
