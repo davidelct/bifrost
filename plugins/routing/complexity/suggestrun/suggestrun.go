@@ -47,6 +47,9 @@ const (
 	// DefaultMaxSuggestedClusters bounds the clusters one run sends to the
 	// model, heaviest first; each costs one or two calls.
 	DefaultMaxSuggestedClusters = 200
+	// callsPerCluster bounds one cluster's model calls: two phrase attempts
+	// and one tier decision.
+	callsPerCluster = 3
 	// keepRuns is how many run records are kept.
 	keepRuns = 200
 )
@@ -106,13 +109,17 @@ type Settings struct {
 	// MaxSuggestedClusters bounds the clusters sent to the model; zero takes
 	// DefaultMaxSuggestedClusters.
 	MaxSuggestedClusters int
-	// Instructions and Guidance are the suggestion prompt's editable parts;
-	// empty takes the shipped ones.
+	// Instructions are the phrase step's editable prompt; empty takes the
+	// shipped one.
 	Instructions string
-	Guidance     string
-	Model        string // provider/model, for the run record
-	Workers      int
-	Seed         int64
+	// Tier picks each cluster's tier; required. TierPrompt identifies what
+	// it was told (classifier, model, instructions, definitions, examples) so
+	// the run's prompt hash changes when any of it does.
+	Tier       suggest.TierDecider
+	TierPrompt string
+	Model      string // the phrase model's provider/model, for the run record
+	Workers    int
+	Seed       int64
 	// Cost reports what the model calls have cost so far, read when the run
 	// ends; nil records no cost.
 	Cost func() float64
@@ -127,16 +134,13 @@ type Result struct {
 	Skipped   int // requests past the assignment bound, not counted
 }
 
-// PromptHash identifies the prompt a run used, so a suggestion can be traced
-// to the instructions that wrote it.
-func PromptHash(instructions, guidance string) string {
+// PromptHash identifies the prompts a run used, so a suggestion can be traced
+// to the instructions that wrote its phrases and picked its tier.
+func PromptHash(instructions, tierPrompt string) string {
 	if instructions == "" {
 		instructions = suggest.DefaultInstructions()
 	}
-	if guidance == "" {
-		guidance = complexity.DefaultLLMClassifierGuidance()
-	}
-	sum := sha256.Sum256([]byte(instructions + "\x00" + guidance))
+	sum := sha256.Sum256([]byte(instructions + "\x00" + tierPrompt))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -167,7 +171,7 @@ func Run(ctx context.Context, space Space, store Store, texts Texts, llm suggest
 	}
 	run := logstore.ComplexitySuggestionRun{
 		ID: s.RunID, RouterID: s.RouterID, RouterVersion: s.RouterVersion, TriggeredBy: s.TriggeredBy, Status: logstore.ComplexitySuggestionRunRunning,
-		EmbeddingSignature: space.Namespace(), Model: s.Model, PromptHash: PromptHash(s.Instructions, s.Guidance),
+		EmbeddingSignature: space.Namespace(), Model: s.Model, PromptHash: PromptHash(s.Instructions, s.TierPrompt),
 		StartedAt: s.Now, WindowStart: s.Now.Add(-s.Window),
 	}
 	if err := store.UpsertComplexitySuggestionRun(ctx, &run); err != nil {
@@ -197,7 +201,10 @@ func Run(ctx context.Context, space Space, store Store, texts Texts, llm suggest
 
 func run1(ctx context.Context, space Space, store Store, texts Texts, llm suggest.LLM, s Settings, run *logstore.ComplexitySuggestionRun) (Result, error) {
 	if llm == nil {
-		return Result{}, errors.New("no suggestion model: set the suggestions provider and model, or configure the llm block")
+		return Result{}, errors.New("no suggestion model: set the suggestions provider and model")
+	}
+	if s.Tier == nil {
+		return Result{}, errors.New("no tier model: set the suggestions tier classifier and model")
 	}
 	if s.MaxClustered <= 0 || s.Window <= 0 {
 		return Result{}, errors.New("suggestion run needs a positive window and cluster budget")
@@ -282,7 +289,7 @@ func run1(ctx context.Context, space Space, store Store, texts Texts, llm sugges
 	}
 
 	// 4. Ask the model.
-	opts := suggest.Options{MatchFloor: matchFloor, Instructions: s.Instructions, Guidance: s.Guidance, Texts: texts}
+	opts := suggest.Options{MatchFloor: matchFloor, Instructions: s.Instructions, Tier: s.Tier, Texts: texts}
 	suggestions, failed, firstErr := suggestEach(ctx, suggest.NewSuggester(live, space, llm, opts), ask, s.Workers)
 	if failed > 0 && failed == len(ask) {
 		return result, fmt.Errorf("suggest phrases: every cluster failed: %w", firstErr)
@@ -528,8 +535,9 @@ type Estimate struct {
 	Clustered int `json:"clustered"`
 	Assigned  int `json:"assigned"`
 	Skipped   int `json:"skipped"`
-	// MaxModelCalls bounds the suggestion model's calls: at most two per
-	// cluster sent, and at most MaxSuggestedClusters clusters are sent.
+	// MaxModelCalls bounds the model calls: at most three per cluster sent
+	// (two phrase attempts and one tier decision), and at most
+	// MaxSuggestedClusters clusters are sent.
 	MaxModelCalls int `json:"max_model_calls"`
 }
 
@@ -551,6 +559,6 @@ func EstimateRun(requests int, s Settings) Estimate {
 		minCluster = suggest.DefaultMinClusterRequests
 	}
 	clusters := (e.Clustered + e.Assigned) / minCluster
-	e.MaxModelCalls = 2 * min(clusters, maxSuggested)
+	e.MaxModelCalls = callsPerCluster * min(clusters, maxSuggested)
 	return e
 }

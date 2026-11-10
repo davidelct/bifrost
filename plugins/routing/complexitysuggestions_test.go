@@ -18,6 +18,7 @@ import (
 	"github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/maximhq/bifrost/framework/logstore"
 	"github.com/maximhq/bifrost/plugins/routing/complexity"
+	"github.com/maximhq/bifrost/plugins/routing/complexity/suggest"
 	"github.com/maximhq/bifrost/plugins/routing/complexity/suggestrun"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,7 +48,12 @@ func suggestionTestSettings() *configstore.ComplexitySuggestionsConfig {
 // suggestion.
 func suggestionPlugin(t *testing.T) (*RoutingPlugin, logstore.LogStore, *[]string) {
 	t.Helper()
-	p := newCapturePlugin(t, suggestionTestSettings())
+	return suggestionPluginWith(t, suggestionTestSettings())
+}
+
+func suggestionPluginWith(t *testing.T, settings *configstore.ComplexitySuggestionsConfig) (*RoutingPlugin, logstore.LogStore, *[]string) {
+	t.Helper()
+	p := newCapturePlugin(t, settings)
 	p.startComplexitySuggestions(context.Background(), 0)
 	store := suggestionTestStore(t)
 	p.SetComplexitySuggestionStore(store, func(_ context.Context, ids []string, _ int) (map[string]string, error) {
@@ -254,6 +260,9 @@ func TestComplexitySuggestionsDueRunThatCannotStartIsSkipped(t *testing.T) {
 
 	warming := complexity.NewSemanticClassifier(ctx, bifrost.NewDefaultLogger(schemas.LogLevelError))
 	t.Cleanup(func() { _ = warming.Close() })
+	// A router's classifier has the gateway's vector store from startup,
+	// warming or not; without one it would read as having nowhere to capture.
+	warming.SetConfiguredStore(&sharedTestStore{})
 	serving := p.semanticClassifier
 	p.semanticClassifier = warming
 	t.Cleanup(func() { p.semanticClassifier = serving })
@@ -557,10 +566,222 @@ func TestComplexitySuggestionsEstimate(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 6, got.Requests)
 	assert.Equal(t, 6, got.Clustered)
-	assert.Equal(t, 6, got.MaxModelCalls, "6 requests make at most 3 clusters of 2, two calls each")
+	assert.Equal(t, 9, got.MaxModelCalls, "6 requests make at most 3 clusters of 2, three calls each")
 
 	_, err = p.EstimateComplexitySuggestionRun(ctx, complexity.DefaultRouterID, 8*24*time.Hour)
 	require.ErrorIs(t, err, ErrComplexitySuggestionWindow)
 	_, err = p.EstimateComplexitySuggestionRun(ctx, "office", 0)
 	require.ErrorIs(t, err, ErrUnknownComplexityRouter)
+}
+
+type recordedChat struct {
+	model, system, user string
+}
+
+// recordChats answers phrase calls with one phrase and tier calls (to
+// tierModel) with tier, recording every call.
+func recordChats(p *RoutingPlugin, tierModel, tier string) *[]recordedChat {
+	var mu sync.Mutex
+	calls := &[]recordedChat{}
+	p.SetChatRequestExecutor(func(_ *schemas.BifrostContext, req *schemas.BifrostChatRequest) (*schemas.BifrostChatResponse, *schemas.BifrostError) {
+		mu.Lock()
+		*calls = append(*calls, recordedChat{model: string(req.Provider) + "/" + req.Model, system: *req.Input[0].Content.ContentStr, user: *req.Input[1].Content.ContentStr})
+		mu.Unlock()
+		if req.Model == tierModel {
+			return chatResponseWithText(fmt.Sprintf(`{"tier":%q,"confidence":"high","reason":"tier step"}`, tier)), nil
+		}
+		return chatResponseWithText(`{"coherent":true,"phrases":["a short question"]}`), nil
+	})
+	return calls
+}
+
+// An llm tier step runs on its own model after the phrase step. Unedited, it
+// sends the prompt rendered from the router, with the router's own phrases as
+// examples of each tier; that is exactly what the editor is shown. The phrase
+// step is no longer asked about tiers.
+func TestComplexitySuggestionsTierStepWithLLM(t *testing.T) {
+	settings := suggestionTestSettings()
+	settings.Tier = &configstore.ComplexitySuggestionsTierConfig{Classifier: "llm", Provider: "openai", Model: "gpt-tier"}
+	p, store, _ := suggestionPluginWith(t, settings)
+	calls := recordChats(p, "gpt-tier", "MEDIUM")
+	_, err := p.StartComplexitySuggestionRunNow(context.Background(), complexity.DefaultRouterID, 0)
+	require.NoError(t, err)
+	run := waitForRun(t, store)
+	require.Equal(t, logstore.ComplexitySuggestionRunSucceeded, run.Status, run.Error)
+
+	var phrase, tier []recordedChat
+	for _, c := range *calls {
+		if c.model == "openai/gpt-tier" {
+			tier = append(tier, c)
+		} else {
+			phrase = append(phrase, c)
+		}
+	}
+	require.NotEmpty(t, phrase)
+	require.Len(t, tier, 1, "one tier call for the one cluster")
+	assert.Equal(t, "openai/gpt-test", phrase[0].model)
+	assert.NotContains(t, phrase[0].system, "Tier definitions")
+	rendered, _ := SuggestionTierDefaults(captureTestConfig(settings))
+	assert.True(t, strings.HasPrefix(tier[0].system, rendered), "an unedited run sends the rendered prompt the editor shows")
+	for _, want := range []string{suggest.DefaultTierInstructions(), "Tier definitions:", "SIMPLE:\n- simple exemplar", "MEDIUM:\n- medium exemplar", "COMPLEX:\n- complex exemplar"} {
+		assert.Contains(t, tier[0].system, want)
+	}
+	assert.Contains(t, tier[0].user, "simple request")
+
+	rows, err := store.ListComplexitySuggestions(context.Background(), logstore.ComplexitySuggestionFilter{RouterID: complexity.DefaultRouterID})
+	require.NoError(t, err)
+	require.NotEmpty(t, rows)
+	for _, row := range rows {
+		assert.Equal(t, "MEDIUM", row.Tier, "the tier comes from the tier step")
+	}
+}
+
+// A decision tier step asks the decision model one choice question: the tier
+// prompt as its instructions, and the router's definitions with its own
+// phrases (never the shipped defaults) as each tier's examples. The chat model
+// only writes phrases.
+func TestComplexitySuggestionsTierStepWithDecisionModel(t *testing.T) {
+	settings := suggestionTestSettings()
+	settings.Tier = &configstore.ComplexitySuggestionsTierConfig{Classifier: "decision", Provider: "typesafe", Model: "jev-latest",
+		Instructions: "Which tier does this request type need?",
+		Criteria: map[string]configstore.ComplexityDecisionTierCriteria{
+			"COMPLEX": {Definition: "Multi-step design work.", Examples: []string{"design our failover"}},
+		}}
+	p, store, _ := suggestionPluginWith(t, settings)
+	calls := recordChats(p, "never", "")
+	var mu sync.Mutex
+	var asked []*schemas.BifrostDecisionRequest
+	p.SetDecisionRequestExecutor(func(_ *schemas.BifrostContext, req *schemas.BifrostDecisionRequest) (*schemas.BifrostDecisionResponse, *schemas.BifrostError) {
+		mu.Lock()
+		asked = append(asked, req)
+		mu.Unlock()
+		resp := decisionChoiceResponse("COMPLEX")
+		confidence := 0.9
+		resp.Answers[0].Confidence = &confidence
+		return resp, nil
+	})
+	_, err := p.StartComplexitySuggestionRunNow(context.Background(), complexity.DefaultRouterID, 0)
+	require.NoError(t, err)
+	run := waitForRun(t, store)
+	require.Equal(t, logstore.ComplexitySuggestionRunSucceeded, run.Status, run.Error)
+
+	for _, c := range *calls {
+		assert.Equal(t, "openai/gpt-test", c.model, "only the phrase step uses the chat model")
+	}
+	require.Len(t, asked, 1)
+	req := asked[0]
+	assert.Equal(t, schemas.ModelProvider("typesafe"), req.Provider)
+	assert.Equal(t, "jev-latest", req.Model)
+	require.Len(t, req.Questions, 1)
+	q := req.Questions[0]
+	assert.Equal(t, schemas.DecisionTypeChoice, q.Type)
+	require.NotNil(t, q.Instructions)
+	assert.Equal(t, "Which tier does this request type need?", *q.Instructions.Text, "edited instructions are sent as written")
+	require.Len(t, q.Choices, 3)
+	for i, tier := range []string{"SIMPLE", "MEDIUM", "COMPLEX"} {
+		assert.Equal(t, tier, *q.Choices[i].Value.Str)
+		described := q.Choices[i].Description.Structured.(map[string]interface{})
+		if tier == "COMPLEX" {
+			assert.Equal(t, "Multi-step design work.", described["definition"], "an edited tier is sent as written")
+			assert.Equal(t, []string{"design our failover"}, described["examples"])
+			assert.Empty(t, described["signals"])
+			continue
+		}
+		assert.Equal(t, []string{strings.ToLower(tier) + " exemplar"}, described["examples"], "unedited tiers carry the router's own phrases")
+	}
+	assert.Contains(t, *req.Input.Messages[0].Content.Text, "simple request")
+
+	rows, err := store.ListComplexitySuggestions(context.Background(), logstore.ComplexitySuggestionFilter{RouterID: complexity.DefaultRouterID})
+	require.NoError(t, err)
+	require.NotEmpty(t, rows)
+	for _, row := range rows {
+		assert.Equal(t, "COMPLEX", row.Tier)
+		assert.Equal(t, "high", row.Confidence)
+	}
+}
+
+// An edited llm prompt is sent as written, in place of everything the router
+// would generate; only the fixed output rules follow it.
+func TestComplexitySuggestionsTierStepSendsAnEditedPrompt(t *testing.T) {
+	settings := suggestionTestSettings()
+	edited := "Support requests are SIMPLE.\nExamples:\n- where is my refund"
+	settings.Tier = &configstore.ComplexitySuggestionsTierConfig{Classifier: "llm", Provider: "openai", Model: "gpt-tier", Prompt: edited}
+	p, store, _ := suggestionPluginWith(t, settings)
+	calls := recordChats(p, "gpt-tier", "SIMPLE")
+	_, err := p.StartComplexitySuggestionRunNow(context.Background(), complexity.DefaultRouterID, 0)
+	require.NoError(t, err)
+	run := waitForRun(t, store)
+	require.Equal(t, logstore.ComplexitySuggestionRunSucceeded, run.Status, run.Error)
+	var tier []recordedChat
+	for _, c := range *calls {
+		if c.model == "openai/gpt-tier" {
+			tier = append(tier, c)
+		}
+	}
+	require.Len(t, tier, 1)
+	assert.True(t, strings.HasPrefix(tier[0].system, edited+"\n\n"), tier[0].system)
+	assert.NotContains(t, tier[0].system, "Tier definitions", "nothing generated is added to an edited prompt")
+	assert.NotContains(t, tier[0].system, "simple exemplar")
+}
+
+// The rendered defaults carry the router's own phrases as examples, never the
+// shipped defaults, and the decision criteria keep the router's definitions
+// and signals.
+func TestSuggestionTierDefaults(t *testing.T) {
+	shipped := complexity.DefaultEditableKeywordConfig()
+	cfg := captureTestConfig(nil)
+	cfg.Keywords = complexity.EditableKeywordConfig{
+		SimpleKeywords:  []string{shipped.SimpleKeywords[0], "check my order status"},
+		MediumKeywords:  []string{shipped.MediumKeywords[0]},
+		ComplexKeywords: []string{"plan our data migration"},
+	}
+	cfg.Decision = &complexity.DecisionConfig{Criteria: map[string]configstore.ComplexityDecisionTierCriteria{"SIMPLE": {Definition: "Our own simple definition."}}}
+	prompt, criteria := SuggestionTierDefaults(cfg)
+	assert.Contains(t, prompt, "SIMPLE:\n- check my order status")
+	assert.Contains(t, prompt, "COMPLEX:\n- plan our data migration")
+	assert.NotContains(t, prompt, shipped.SimpleKeywords[0])
+	assert.NotContains(t, prompt, "MEDIUM:\n-", "a tier with only shipped phrases gets no examples")
+	assert.Equal(t, "Our own simple definition.", criteria["SIMPLE"].Definition)
+	assert.Equal(t, []string{"check my order status"}, criteria["SIMPLE"].Examples)
+	assert.Empty(t, criteria["MEDIUM"].Examples)
+	assert.NotEmpty(t, criteria["MEDIUM"].Signals, "signals stay the router's")
+}
+
+func TestDecisionConfidenceLabel(t *testing.T) {
+	for value, want := range map[float64]string{0.95: "high", 0.75: "high", 0.5: "medium", 0.1: "low", 1.5: "", -0.2: ""} {
+		assert.Equal(t, want, decisionConfidenceLabel(value), "%v", value)
+	}
+}
+
+// With Chromem as Bifrost's vector store nothing is captured, so a suggestion
+// run has nothing to read: estimating and starting one are refused with the
+// reason, and the schedule neither claims its runs nor records one, failed or
+// skipped, every interval.
+func TestComplexitySuggestionsRefusedOnChromem(t *testing.T) {
+	start := time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
+	settings := suggestionTestSettings()
+	settings.Schedule = hourlyFrom(start)
+	p := newCapturePluginWithStore(t, settings, false)
+	p.startComplexitySuggestions(context.Background(), 0)
+	store := suggestionTestStore(t)
+	p.SetComplexitySuggestionStore(store, func(context.Context, []string, int) (map[string]string, error) { return nil, nil })
+	ctx := context.Background()
+
+	_, err := p.EstimateComplexitySuggestionRun(ctx, complexity.DefaultRouterID, 0)
+	require.ErrorIs(t, err, complexity.ErrNoCaptureStore)
+	_, err = p.StartComplexitySuggestionRunNow(ctx, complexity.DefaultRouterID, 0)
+	require.ErrorIs(t, err, complexity.ErrNoCaptureStore)
+
+	schedules := suggestionScheduleStore(t)
+	p.SetComplexitySuggestionSchedules(schedules)
+	for _, at := range []time.Time{start.Add(10 * time.Minute), start.Add(time.Hour + time.Second), start.Add(2*time.Hour + time.Second)} {
+		require.NoError(t, p.scheduleComplexitySuggestions(ctx, at))
+	}
+	p.suggestions.wg.Wait()
+	runs, err := store.ListComplexitySuggestionRuns(ctx, logstore.ComplexitySuggestionRunFilter{}, 10)
+	require.NoError(t, err)
+	assert.Empty(t, runs)
+	row, err := schedules.GetComplexitySuggestionSchedule(ctx, complexity.DefaultRouterID)
+	require.NoError(t, err)
+	assert.Nil(t, row, "nothing claimed, so a capture store added later starts the schedule fresh")
 }

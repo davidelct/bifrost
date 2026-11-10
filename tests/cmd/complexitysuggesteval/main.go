@@ -65,7 +65,8 @@ func main() {
 		split      = flag.Float64("split", 0, "split clusters whose halves are less similar than this (0 = join threshold, -1 = off)")
 		rescue     = flag.Float64("rescue", 0, "merge undersized clusters with each other at this similarity (0 = default 0.75, -1 = off)")
 		workers    = flag.Int("workers", 10, "concurrent LLM calls")
-		instrFile  = flag.String("instructions", "", "file with custom suggestion instructions (default: suggest.DefaultInstructions)")
+		instrFile  = flag.String("instructions", "", "file with custom phrase-step instructions (default: suggest.DefaultInstructions)")
+		tierFile   = flag.String("tier-prompt", "", "file with the whole tier-step prompt body: instructions, definitions, examples (default: rendered by suggest.TierPrompt)")
 		dropBelow  = flag.Float64("drop-below", 0, "leave out of scoring suggestions covering less than this share of their own cluster")
 		onlyClust  = flag.Bool("cluster-only", false, "cluster, print cluster stats, and exit before any LLM call")
 	)
@@ -99,6 +100,18 @@ func main() {
 		}
 		opts.Instructions = string(data)
 	}
+	if *tierFile != "" {
+		data, err := os.ReadFile(*tierFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		if n := len([]rune(string(data))); n > suggest.MaxTierPromptChars {
+			fmt.Fprintf(os.Stderr, "error: the tier prompt is %d characters; the limit is %d\n", n, suggest.MaxTierPromptChars)
+			os.Exit(1)
+		}
+		tierPrompt = string(data)
+	}
 	if err := run(*jsonl, *out, *cache, *baseURL, *embedModel, *chatModel, *judgeModel, *judgeN, *testPct, opts); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
@@ -127,6 +140,7 @@ func validateFloatFlags(split, rescue, dropBelow float64) error {
 var (
 	clusterOnly  bool
 	dropCoverage float64
+	tierPrompt   string
 )
 
 type embedder struct{ api *apiClient }
@@ -226,6 +240,9 @@ func run(jsonlPath, outDir, cachePath, baseURL, embedModel, chatModel, judgeMode
 	}
 
 	start = time.Now()
+	// The tier step uses the chat model too. The eval's phrase bank is the
+	// shipped defaults, so it sends no router examples.
+	opts.Tier = &suggest.LLMTierDecider{LLM: llm{api}, Prompt: tierPrompt}
 	sgs, err := suggest.NewSuggester(live, embedder{api}, llm{api}, opts).SuggestAll(ctx, clusters)
 	if serr := api.save(); err == nil && serr != nil {
 		err = fmt.Errorf("save cache: %w", serr)

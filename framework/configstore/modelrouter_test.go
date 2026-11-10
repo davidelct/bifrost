@@ -110,6 +110,7 @@ func TestModelRouterTableKeepsAbsentAndZeroBlocksApart(t *testing.T) {
 		assert.Nil(t, row.SessionEnabled)
 		assert.Nil(t, row.SuggestionsEnabled)
 		assert.Nil(t, row.SuggestionsScheduleEvery)
+		assert.Nil(t, row.SuggestionsTierClassifier)
 
 		back, err := modelRouterFromTable(row)
 		require.NoError(t, err)
@@ -511,6 +512,25 @@ func migrationTestStore(db *gorm.DB) *RDBConfigStore {
 // TestMigrationAddModelRoutersTable pins that the migration moves exactly
 // what this version would have routed with, bookkeeping included, and nothing
 // it would have ignored.
+// TestMigrationAddModelRouterSuggestionTierColumns pins that a model_routers
+// table created before the suggestions tier block gets its columns, that a
+// router saved then reads back without a tier block, and that rerunning is a
+// no-op.
+func TestMigrationAddModelRouterSuggestionTierColumns(t *testing.T) {
+	ctx := context.Background()
+	db := setupModelRouterMigrationDB(t)
+	require.NoError(t, db.AutoMigrate(&tables.TableModelRouter{}))
+	for _, column := range modelRouterSuggestionTierColumns {
+		require.NoError(t, db.Migrator().DropColumn(&tables.TableModelRouter{}, column))
+	}
+
+	require.NoError(t, migrationAddModelRouterSuggestionTierColumns(ctx, db, testMigrationLogger))
+	for _, column := range modelRouterSuggestionTierColumns {
+		assert.True(t, db.Migrator().HasColumn(&tables.TableModelRouter{}, column), column)
+	}
+	require.NoError(t, migrationAddModelRouterSuggestionTierColumns(ctx, db, testMigrationLogger))
+}
+
 func TestMigrationAddModelRoutersTable(t *testing.T) {
 	ctx := context.Background()
 

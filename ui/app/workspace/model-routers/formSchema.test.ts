@@ -7,6 +7,7 @@ import {
 	DEFAULT_SUGGESTIONS_FORM_VALUES,
 	getDecisionProviderState,
 	isRouterConfigured,
+	isTierCriteriaEmpty,
 	decisionGuidanceFormValues,
 	decisionTimeoutFieldValue,
 	shouldSeedLLMPrompt,
@@ -15,7 +16,12 @@ import {
 	toFormValues,
 	toSuggestionsPayload,
 } from "./formSchema";
-import { DEFAULT_DECISION_CONFIG, type AnalyzerConfig, type DecisionGuidanceDefaults } from "@/lib/types/complexityRouter";
+import {
+	DEFAULT_DECISION_CONFIG,
+	type AnalyzerConfig,
+	type DecisionGuidanceDefaults,
+	type SuggestionTierDefaults,
+} from "@/lib/types/complexityRouter";
 import type { ModelProvider } from "@/lib/types/config";
 import type { DBKey } from "@/lib/types/governance";
 
@@ -171,10 +177,12 @@ describe("Decision complexity configuration", () => {
 				provider: "openai",
 				model: "gpt-5",
 				instructions: "be brief",
+				tier: { classifier: "decision", provider: "typesafe", model: "jev-latest", instructions: "judge the work" },
 			},
 		};
 		const values = toFormValues(saved);
 		expect(values.suggestions.sample_percent).toBe(10);
+		expect(values.suggestions.tier_classifier).toBe("decision");
 		const parsed = analyzerConfigSchema.safeParse(values);
 		expect(parsed.success).toBe(true);
 		if (!parsed.success) return;
@@ -184,7 +192,13 @@ describe("Decision complexity configuration", () => {
 	test("leaves the cluster sizes to the gateway: not edited, kept as saved, never filled in", () => {
 		const saved: AnalyzerConfig = {
 			keywords: { simple_keywords: ["simple"], medium_keywords: ["medium"], complex_keywords: ["complex"] },
-			suggestions: { enabled: true, lookback_days: 7 },
+			suggestions: {
+				enabled: true,
+				lookback_days: 7,
+				provider: "openai",
+				model: "gpt-5",
+				tier: { classifier: "llm", provider: "openai", model: "gpt-5" },
+			},
 		};
 		const values = toFormValues(saved);
 		expect(values.suggestions).not.toHaveProperty("max_clustered_requests");
@@ -195,6 +209,122 @@ describe("Decision complexity configuration", () => {
 		const payload = toAnalyzerPayload(parsed.data, saved).suggestions;
 		expect(payload).not.toHaveProperty("max_clustered_requests");
 		expect(payload).not.toHaveProperty("min_cluster_requests");
+	});
+
+	test("needs both models named while suggestions are on, and each provider paired with a model", () => {
+		const keywords = { simple_keywords: ["simple"], medium_keywords: ["medium"], complex_keywords: ["complex"] };
+		const issues = (suggestions: Partial<typeof DEFAULT_FORM_VALUES.suggestions>) => {
+			const parsed = analyzerConfigSchema.safeParse({
+				...DEFAULT_FORM_VALUES,
+				keywords,
+				suggestions: { ...DEFAULT_FORM_VALUES.suggestions, ...suggestions },
+			});
+			return parsed.success ? [] : parsed.error.issues.map((issue) => issue.path.join("."));
+		};
+		// Off, nothing needs a model: the settings are only kept.
+		expect(issues({ enabled: false })).toEqual([]);
+		// On, neither model may be left to a fallback.
+		expect(issues({ enabled: true })).toEqual(["suggestions.model", "suggestions.tier_model"]);
+		const named = { enabled: true, provider: "openai", model: "gpt-5", tier_provider: "typesafe", tier_model: "jev-latest" };
+		expect(issues({ ...named, tier_classifier: "decision" })).toEqual([]);
+		expect(issues({ ...named, tier_model: "" })).toEqual(["suggestions.tier_model"]);
+		expect(issues({ ...named, tier_provider: "" })).toEqual(["suggestions.tier_provider"]);
+	});
+
+	test("always sends the tier step, and only the model and prompt it has", () => {
+		const parsed = analyzerConfigSchema.safeParse({
+			...DEFAULT_FORM_VALUES,
+			keywords: { simple_keywords: ["simple"], medium_keywords: ["medium"], complex_keywords: ["complex"] },
+			suggestions: {
+				...DEFAULT_FORM_VALUES.suggestions,
+				enabled: true,
+				provider: "openai",
+				model: "gpt-5",
+				tier_provider: "openai",
+				tier_model: "gpt-5",
+			},
+		});
+		expect(parsed.success).toBe(true);
+		if (!parsed.success) return;
+		expect(toAnalyzerPayload(parsed.data).suggestions?.tier).toEqual({ classifier: "llm", provider: "openai", model: "gpt-5" });
+		const prompted = { ...parsed.data, suggestions: { ...parsed.data.suggestions, tier_instructions: "judge the work" } };
+		expect(toAnalyzerPayload(prompted).suggestions?.tier?.instructions).toBe("judge the work");
+	});
+
+	describe("tier step text", () => {
+		const keywords = { simple_keywords: ["simple"], medium_keywords: ["medium"], complex_keywords: ["complex"] };
+		const generated: SuggestionTierDefaults = {
+			prompt: "Pick a tier.\n\nTier definitions:\n...\n\nMEDIUM:\n- medium",
+			criteria: {
+				SIMPLE: { definition: "One short answer.", signals: ["a lookup"], examples: [] },
+				MEDIUM: { definition: "Routine work.", signals: ["a draft"], examples: ["medium"] },
+				COMPLEX: { definition: "Design work.", signals: ["trade-offs"], examples: [] },
+			},
+		};
+		const decision = {
+			enabled: true,
+			provider: "openai",
+			model: "gpt-5",
+			tier: { classifier: "decision" as const, provider: "typesafe", model: "jev-latest" },
+		};
+
+		test("seeds each tier from its saved edit, the rest from what the gateway generates", () => {
+			const saved: AnalyzerConfig = {
+				keywords,
+				suggestions: {
+					...decision,
+					tier: { ...decision.tier, criteria: { COMPLEX: { definition: "Our own.", examples: ["design failover"] } } },
+				},
+			};
+			const criteria = toFormValues(saved, undefined, generated).suggestions.tier_criteria;
+			expect(criteria.SIMPLE).toEqual(generated.criteria.SIMPLE);
+			expect(criteria.COMPLEX).toEqual({ definition: "Our own.", signals: [], examples: ["design failover"] });
+			// Before the generated criteria arrive, only saved tiers are filled.
+			const early = toFormValues(saved).suggestions.tier_criteria;
+			expect(early.SIMPLE.definition).toBe("");
+			expect(isTierCriteriaEmpty(early)).toBe(false);
+		});
+
+		test("sends only what differs from the generated text, so the rest keeps following the router", () => {
+			const saved: AnalyzerConfig = { keywords, suggestions: decision };
+			const values = toFormValues(saved, undefined, generated);
+			const parsed = analyzerConfigSchema.safeParse(values);
+			expect(parsed.success).toBe(true);
+			if (!parsed.success) return;
+			// Untouched: nothing frozen.
+			expect(toAnalyzerPayload(parsed.data, saved, generated).suggestions?.tier).toEqual(decision.tier);
+			// One tier edited: only that tier is sent, as written.
+			const edited = structuredClone(parsed.data);
+			edited.suggestions.tier_criteria.MEDIUM.examples = ["medium", "draft a refund reply"];
+			expect(toAnalyzerPayload(edited, saved, generated).suggestions?.tier?.criteria).toEqual({
+				MEDIUM: { definition: "Routine work.", signals: ["a draft"], examples: ["medium", "draft a refund reply"] },
+			});
+			// An llm prompt identical to the generated one is the generated one.
+			const llm = { ...edited, suggestions: { ...edited.suggestions, tier_classifier: "llm" as const, tier_prompt: generated.prompt } };
+			expect(toAnalyzerPayload(llm, saved, generated).suggestions?.tier?.prompt).toBeUndefined();
+			const rewritten = { ...llm, suggestions: { ...llm.suggestions, tier_prompt: "Refunds are SIMPLE." } };
+			expect(toAnalyzerPayload(rewritten, saved, generated).suggestions?.tier?.prompt).toBe("Refunds are SIMPLE.");
+		});
+
+		test("keeps saved edits when the generated text is not known yet", () => {
+			const criteria = { COMPLEX: { definition: "Our own.", examples: ["design failover"] } };
+			const saved: AnalyzerConfig = { keywords, suggestions: { ...decision, tier: { ...decision.tier, criteria } } };
+			const parsed = analyzerConfigSchema.safeParse(toFormValues(saved));
+			expect(parsed.success).toBe(true);
+			if (!parsed.success) return;
+			expect(toAnalyzerPayload(parsed.data, saved).suggestions?.tier?.criteria).toEqual(criteria);
+		});
+
+		test("needs a definition for every tier a decision step sends, but lets lists be empty", () => {
+			const saved: AnalyzerConfig = { keywords, suggestions: decision };
+			const values = toFormValues(saved, undefined, generated);
+			expect(analyzerConfigSchema.safeParse(values).success).toBe(true);
+			values.suggestions.tier_criteria.SIMPLE.definition = " ";
+			const parsed = analyzerConfigSchema.safeParse(values);
+			expect(parsed.success).toBe(false);
+			if (parsed.success) return;
+			expect(parsed.error.issues.map((issue) => issue.path.join("."))).toEqual(["suggestions.tier_criteria.SIMPLE.definition"]);
+		});
 	});
 
 	test("sends suggestions only once they have been used, and keeps them when turned off", () => {

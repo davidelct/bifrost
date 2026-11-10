@@ -56,7 +56,11 @@ func (c *SemanticClassifier) SuggestionSpace(ctx context.Context) (*SuggestionSp
 		return nil, ErrNoServingGeneration
 	}
 	embedBatch := c.embedBatch
-	captureStore := c.configuredStore
+	captureStore := c.captureStoreLocked()
+	if captureStore == nil {
+		c.mu.Unlock()
+		return nil, ErrNoCaptureStore
+	}
 	if isLocalChromemStore(generation.store) {
 		if c.localInFlight == nil {
 			c.localInFlight = make(map[*semanticGeneration]int)

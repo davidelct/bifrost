@@ -242,7 +242,27 @@ test.describe('Model Router: default router', () => {
       classifier: 'semantic',
       keywords: { simple_keywords: ['hello'], medium_keywords: ['summarize this support thread'], complex_keywords: ['design a system'] },
       semantic: { provider: 'openai', embedding_model: 'text-embedding-3-small', timeout: '2000ms', min_similarity: 0.4, vector_store: 'embedded', fallback: 'none' },
-      suggestions: { enabled: true, sample_rate: 0.1, lookback_days: 7, schedule: { every: '1d', at: '03:00', timezone: 'UTC' }, max_clustered_requests: 20000, min_cluster_requests: 6 },
+      // As the gateway returns it: the models a run uses are filled in.
+      suggestions: {
+        enabled: true,
+        sample_rate: 0.1,
+        lookback_days: 7,
+        schedule: { every: '1d', at: '03:00', timezone: 'UTC' },
+        max_clustered_requests: 20000,
+        min_cluster_requests: 6,
+        provider: 'openai',
+        model: 'gpt-4.1-mini',
+        tier: { classifier: 'llm', provider: 'openai', model: 'gpt-4.1-mini' },
+      },
+    }
+    const TIER_PROMPT =
+      'Pick the tier by the work asked.\n\nTier definitions:\n- "SIMPLE": short answers\n\n' +
+      "Requests this router's administrator assigned to each tier; requests like these belong in that tier:\n" +
+      'SIMPLE:\n- hello\nMEDIUM:\n- summarize this support thread\nCOMPLEX:\n- design a system'
+    const TIER_CRITERIA = {
+      SIMPLE: { definition: 'One short answer.', signals: ['a lookup'], examples: ['hello'] },
+      MEDIUM: { definition: 'Routine multi-step work.', signals: ['a draft'], examples: ['summarize this support thread'] },
+      COMPLEX: { definition: 'Design with trade-offs.', signals: ['trade-offs'], examples: ['design a system'] },
     }
     let saved: Record<string, unknown>[] = []
     let statusCalls: { id: string; status: string }[] = []
@@ -271,7 +291,17 @@ test.describe('Model Router: default router', () => {
         (url) => url.pathname === '/api/routing/model-routers/default/status',
         (route) =>
           route.fulfill({
-            json: { state: 'ready', loaded: 3, total: 3, cached_phrases: 3, suggestion_default_instructions: 'Write short reference phrases.' },
+            json: {
+              state: 'ready',
+              loaded: 3,
+              total: 3,
+              cached_phrases: 3,
+              suggestion_default_instructions: 'Write short reference phrases.',
+              suggestion_default_tier_instructions: 'Pick the tier by the work asked.',
+              // Rendered by the gateway from this router: its own phrases are the examples.
+              suggestion_default_tier_prompt: TIER_PROMPT,
+              suggestion_default_tier_criteria: TIER_CRITERIA,
+            },
           }),
       )
       await page.route(
@@ -399,10 +429,13 @@ test.describe('Model Router: default router', () => {
 
     test('should stage a suggestion, edit it, and accept it when the config is saved', async ({ page }) => {
       await page.goto('/workspace/model-routers?router=default&tab=suggestions')
+      await page.getByTestId('complexity-suggestion-expand-sug-refund').click()
       await page.getByTestId('complexity-suggestion-add-sug-refund').click()
 
-      // Staged: gone from the list, shown in the staged panel, and the save is pending.
+      // Staged: gone from the list, shown in its tier, and the save is pending.
       await expect(page.getByTestId('complexity-suggestion-row-sug-refund')).toHaveCount(0)
+      await expect(page.getByTestId('complexity-suggestions-staged-phrase-sug-refund-0')).toContainText('where is my refund')
+      await page.getByTestId('complexity-suggestions-staged-edit-sug-refund-0').click()
       const stagedInput = page.getByTestId('complexity-suggestions-staged-input-sug-refund-0')
       await expect(stagedInput).toHaveValue('where is my refund')
       await expect(page.getByTestId('complexity-router-footer-note')).toContainText('1 suggested phrase staged')
@@ -421,9 +454,9 @@ test.describe('Model Router: default router', () => {
 
     test('should take a staged suggestion back without saving it', async ({ page }) => {
       await page.goto('/workspace/model-routers?router=default&tab=suggestions')
-      await page.getByTestId('complexity-suggestion-tier-select-sug-migration').click()
-      await page.getByRole('option', { name: 'Medium' }).click()
-      await page.getByTestId('complexity-suggestion-add-sug-migration').click()
+      await page.getByTestId('complexity-suggestion-expand-sug-migration').click()
+      await page.getByTestId('complexity-suggestion-add-menu-sug-migration').click()
+      await page.getByTestId('complexity-suggestion-add-sug-migration-medium').click()
       await expect(page.getByTestId('complexity-suggestions-staged-medium')).toContainText('+1 new')
 
       await page.getByTestId('complexity-suggestions-staged-undo-sug-migration').click()
@@ -431,25 +464,190 @@ test.describe('Model Router: default router', () => {
       await expect(page.getByTestId('complexity-router-save-changes-button')).toBeDisabled()
     })
 
+    test('should add a selection to a tier, and a dragged row to the tier it is dropped on', async ({ page }) => {
+      await page.goto('/workspace/model-routers?router=default&tab=suggestions')
+      const header = page.getByTestId('complexity-suggestions-list-header')
+      await expect(header).toContainText('2 suggestions')
+
+      await page.getByTestId('complexity-suggestion-select-sug-refund').click()
+      await expect(header).toContainText('1 of 2 selected')
+      await expect(page.getByTestId('complexity-suggestions-bulk-dismiss')).toHaveText('Dismiss 1')
+      await page.getByTestId('complexity-suggestions-bulk-add').click()
+      await page.getByTestId('complexity-suggestions-bulk-add-complex').click()
+      await expect(page.getByTestId('complexity-suggestion-row-sug-refund')).toHaveCount(0)
+      await expect(page.getByTestId('complexity-suggestions-staged-complex')).toContainText('where is my refund')
+      await expect(header).toContainText('1 suggestion')
+
+      await page.getByTestId('complexity-suggestion-row-sug-migration').dragTo(page.getByTestId('complexity-suggestions-staged-simple'))
+      await expect(page.getByTestId('complexity-suggestion-row-sug-migration')).toHaveCount(0)
+      await expect(page.getByTestId('complexity-suggestions-staged-simple')).toContainText('plan a database migration')
+      await expect(page.getByTestId('complexity-router-footer-note')).toContainText('2 suggested phrases staged')
+    })
+
     test('should dismiss a suggestion and start a run', async ({ page }) => {
       await page.goto('/workspace/model-routers?router=default&tab=suggestions')
+      await page.getByTestId('complexity-suggestion-expand-sug-migration').click()
       await page.getByTestId('complexity-suggestion-dismiss-sug-migration').click()
       await expect.poll(() => statusCalls).toEqual([{ id: 'sug-migration', status: 'dismissed' }])
 
       await page.getByTestId('complexity-suggestions-run-now-button').click()
       const dialog = page.getByTestId('complexity-suggestions-run-dialog')
       await expect(dialog).toBeVisible()
+      // One line of copy; the estimate only gates Start and shows nothing when
+      // there is something to run on.
+      await expect(dialog).toContainText('Runs in the background inside your gateway, outside the request path.')
+      await expect(dialog).not.toContainText('requests in the window')
+      await expect(page.getByTestId('complexity-suggestions-run-estimate')).toHaveCount(0)
+      const startButton = page.getByTestId('complexity-suggestions-run-start-button')
+      await expect(startButton).toBeEnabled()
       // The 7-day lookback offers 24 hours and 7 days, and starts on 7 days.
-      await expect(page.getByTestId('complexity-suggestions-run-estimate')).toContainText('8,400 requests in the window')
       await page.getByTestId('complexity-suggestions-run-window-select').click()
       await expect(page.getByTestId('complexity-suggestions-run-window-14d')).toHaveCount(0)
       await page.getByTestId('complexity-suggestions-run-window-24h').click()
-      await expect(page.getByTestId('complexity-suggestions-run-estimate')).toContainText('1,200 requests in the window')
-      await expect(page.getByTestId('complexity-suggestions-run-estimate')).toContainText('At most 400 suggestion-model calls')
-      await page.getByTestId('complexity-suggestions-run-start-button').click()
+      await expect(startButton).toBeEnabled()
+      await startButton.click()
       await expect.poll(() => runStarts).toBe(1)
       expect(runWindows).toEqual(['24h'])
       await expect(dialog).toBeHidden()
+    })
+
+    test('should show a started run\'s suggestions without a reload', async ({ page }) => {
+      const STARTED = '6f1d2c3a-8b4e-4f5a-9c7d-1e2f3a4b5c6d'
+      const FRESH = { ...OPEN[0], id: 'sug-fresh', phrases: ['reset my password'], request_count: 9 }
+      let listedAfterStart = 0
+      // The gateway queues a run before the run records itself, so the lists
+      // refetched right after the start (the tab's and the tab count's) still
+      // show the previous run.
+      await page.route(
+        (url) => url.pathname === '/api/routing/complexity-suggestions',
+        (route) => {
+          if (runStarts === 0) return route.fallback()
+          listedAfterStart++
+          const fresh = listedAfterStart > 2
+          return route.fulfill({
+            json: {
+              router_id: 'default',
+              suggestions: fresh ? [...OPEN, FRESH] : OPEN,
+              counts: { open: OPEN.length + (fresh ? 1 : 0), dismissed: DISMISSED.length },
+              enabled: true,
+              last_run: fresh ? { ...LAST_RUN, id: STARTED, triggered_by: 'manual' } : LAST_RUN,
+              next_run_at: '2026-11-05T03:00:00Z',
+            },
+          })
+        },
+      )
+      await page.goto('/workspace/model-routers?router=default&tab=suggestions')
+      await page.getByTestId('complexity-suggestions-run-now-button').click()
+      await expect(page.getByTestId('complexity-suggestions-run-start-button')).toBeEnabled()
+      await page.getByTestId('complexity-suggestions-run-start-button').click()
+      await expect.poll(() => runStarts).toBe(1)
+      await expect(page.getByTestId('complexity-suggestions-run-now-button')).toBeDisabled()
+
+      await expect(page.getByTestId('complexity-suggestion-row-sug-fresh')).toBeVisible({ timeout: 15000 })
+      await expect(page.getByTestId('complexity-router-tab-suggestions-count')).toHaveText('3')
+      await expect(page.getByTestId('complexity-suggestions-run-now-button')).toBeEnabled()
+    })
+
+    test('should mark a suggestion that adds two phrases', async ({ page }) => {
+      const PAIR = { ...OPEN[0], id: 'sug-pair', phrases: ['translate this to formal german', 'formal german translation please'] }
+      await page.route(
+        (url) => url.pathname === '/api/routing/complexity-suggestions',
+        (route) =>
+          route.fulfill({
+            json: { suggestions: [PAIR], counts: { open: 1, dismissed: 0 }, enabled: true, last_run: LAST_RUN },
+          }),
+      )
+      await page.goto('/workspace/model-routers?router=default&tab=suggestions')
+      const row = page.getByTestId('complexity-suggestion-row-sug-pair')
+      await expect(row).toContainText('translate this to formal german')
+      await expect(row).toContainText('formal german translation please')
+      await expect(page.getByTestId('complexity-suggestion-phrase-count-sug-pair')).toHaveText('2 phrases')
+    })
+
+    test('should decide suggestion tiers with a decision model, sending only the tiers edited', async ({ page }) => {
+      await page.goto('/workspace/model-routers?router=default&tab=suggestions')
+      await page.getByTestId('complexity-suggestions-settings-button').click()
+      const sheet = page.getByTestId('complexity-suggestions-settings-sheet')
+      await expect(sheet).toBeVisible()
+      // No fallback model to explain away: both steps name their model.
+      await expect(sheet).not.toContainText('LLM fallback model')
+      await expect(page.getByTestId('complexity-suggestions-phrase-section')).toBeVisible()
+
+      await page.getByTestId('complexity-suggestions-tier-classifier-select').click()
+      await page.getByTestId('complexity-suggestions-tier-classifier-option-decision').click()
+      await expect(page.getByTestId('complexity-suggestions-tier-provider-select')).toBeVisible()
+      // The question shows the shipped text until it is edited.
+      const question = page.getByTestId('complexity-suggestions-tier-instructions-input')
+      await expect(question).toHaveValue('Pick the tier by the work asked.')
+      await expect(page.getByTestId('complexity-suggestions-tier-instructions-state')).toHaveText('Shipped')
+      await question.fill('Judge the work each request asks for.')
+      await expect(page.getByTestId('complexity-suggestions-tier-instructions-state')).toHaveText('Edited')
+
+      // Each tier's choice shows the router's own phrases as its examples.
+      const complex = page.getByTestId('complexity-suggestions-tier-criteria-tier-complex')
+      await expect(complex).toContainText('Design with trade-offs.')
+      await expect(complex).toContainText('design a system')
+      await page.getByTestId('complexity-suggestions-tier-criteria-complex-definition-edit-button').click()
+      await page.getByTestId('complexity-suggestions-tier-criteria-complex-definition-input').fill('Multi-step design work.')
+      await page.getByTestId('complexity-suggestions-settings-save-button').click()
+
+      await expect.poll(() => saved.length).toBe(1)
+      expect(saved[0].suggestions).toMatchObject({
+        provider: 'openai',
+        model: 'gpt-4.1-mini',
+        // The router has no decision model of its own, so the shipped one.
+        tier: {
+          classifier: 'decision',
+          provider: 'typesafe',
+          model: 'jev-latest',
+          instructions: 'Judge the work each request asks for.',
+          // Only the edited tier is frozen; the others stay generated.
+          criteria: { COMPLEX: { definition: 'Multi-step design work.', signals: ['trade-offs'], examples: ['design a system'] } },
+        },
+      })
+      const tier = (saved[0].suggestions as { tier: { criteria: Record<string, unknown> } }).tier
+      expect(Object.keys(tier.criteria)).toEqual(['COMPLEX'])
+    })
+
+    test('should show and edit the whole llm tier prompt, examples included', async ({ page }) => {
+      await page.goto('/workspace/model-routers?router=default&tab=suggestions')
+      await page.getByTestId('complexity-suggestions-settings-button').click()
+      const prompt = page.getByTestId('complexity-suggestions-tier-prompt-input')
+      // Unedited, the editor holds the generated prompt, examples and all.
+      await expect(prompt).toHaveValue(TIER_PROMPT)
+      await expect(page.getByTestId('complexity-suggestions-tier-prompt-state')).toHaveText('Generated')
+      await expect(page.getByTestId('complexity-suggestions-tier-prompt-reset-button')).toHaveCount(0)
+
+      const edited = TIER_PROMPT.replace('MEDIUM:\n- summarize this support thread', 'MEDIUM:\n- summarize this support thread\n- draft a refund reply')
+      await prompt.fill(edited)
+      await expect(page.getByTestId('complexity-suggestions-tier-prompt-state')).toHaveText('Edited')
+      // Back to generated: the editor shows the generated prompt again.
+      await page.getByTestId('complexity-suggestions-tier-prompt-reset-button').click()
+      await expect(prompt).toHaveValue(TIER_PROMPT)
+      await expect(page.getByTestId('complexity-suggestions-tier-prompt-state')).toHaveText('Generated')
+
+      await prompt.fill(edited)
+      await page.getByTestId('complexity-suggestions-settings-save-button').click()
+      await expect.poll(() => saved.length).toBe(1)
+      expect(saved[0].suggestions).toMatchObject({ tier: { classifier: 'llm', prompt: edited } })
+    })
+
+    test('should not save suggestions turned on without a model to write phrases', async ({ page }) => {
+      await page.route(
+        (url) => url.pathname === '/api/routing/model-routers/default',
+        (route) => {
+          if (route.request().method() === 'PUT') return route.fallback()
+          const { provider: _p, model: _m, tier: _t, ...rest } = CONFIG.suggestions
+          return route.fulfill({ json: { ...CONFIG, suggestions: { ...rest, enabled: false } } })
+        },
+      )
+      await page.goto('/workspace/model-routers?router=default&tab=suggestions')
+      await page.getByTestId('complexity-suggestions-settings-button').click()
+      await page.getByTestId('complexity-suggestions-enabled-switch').click()
+      await page.getByTestId('complexity-suggestions-settings-save-button').click()
+      await expect(page.getByTestId('complexity-suggestions-settings-sheet')).toContainText('Choose the model that writes phrases')
+      await expect(page.getByTestId('complexity-suggestions-settings-sheet')).toContainText('Choose the model that decides tiers')
+      expect(saved).toHaveLength(0)
     })
 
     test('should not show or start on an estimate for another window', async ({ page }) => {
@@ -468,26 +666,61 @@ test.describe('Model Router: default router', () => {
       await page.getByTestId('complexity-suggestions-run-now-button').click()
       const estimate = page.getByTestId('complexity-suggestions-run-estimate')
       const startButton = page.getByTestId('complexity-suggestions-run-start-button')
-      await expect(estimate).toContainText('8,400 requests in the window')
       await expect(startButton).toBeEnabled()
 
       await page.getByTestId('complexity-suggestions-run-window-select').click()
       await page.getByTestId('complexity-suggestions-run-window-24h').click()
-      // While the new window is estimated, the old window's counts are gone
-      // and the run cannot start.
-      await expect(estimate).toContainText('Estimating')
-      await expect(estimate).not.toContainText('8,400')
+      // While the new window is estimated, the run cannot start on the old
+      // window's estimate.
       await expect(startButton).toBeDisabled()
 
       release()
       await expect(estimate).toContainText('Could not estimate the run')
-      await expect(estimate).not.toContainText('8,400')
       await expect(startButton).toBeDisabled()
       expect(runStarts).toBe(0)
     })
 
+    test('should not start a run on a window with nothing captured', async ({ page }) => {
+      await page.route(
+        (url) => url.pathname === '/api/routing/complexity-suggestions/runs/estimate',
+        (route) => route.fulfill({ json: { requests: 0, clustered: 0, assigned: 0, skipped: 0, max_model_calls: 0 } }),
+      )
+      await page.goto('/workspace/model-routers?router=default&tab=suggestions')
+      await page.getByTestId('complexity-suggestions-run-now-button').click()
+      await expect(page.getByTestId('complexity-suggestions-run-estimate')).toContainText('No requests have been captured in this window yet.')
+      await expect(page.getByTestId('complexity-suggestions-run-start-button')).toBeDisabled()
+    })
+
+    test('should say why nothing is captured when the vector store is Chromem', async ({ page }) => {
+      await page.route(
+        (url) => url.pathname === '/api/routing/model-routers/default/status',
+        (route) =>
+          route.fulfill({
+            json: {
+              state: 'ready',
+              loaded: 3,
+              total: 3,
+              cached_phrases: 3,
+              capture_available: false,
+              capture_unavailable_reason: 'embedded_vector_store',
+              suggestion_default_instructions: 'Write short reference phrases.',
+              suggestion_default_tier_instructions: 'Pick the tier by the work asked.',
+              suggestion_default_tier_prompt: TIER_PROMPT,
+              suggestion_default_tier_criteria: TIER_CRITERIA,
+            },
+          }),
+      )
+      await page.goto('/workspace/model-routers?router=default&tab=suggestions')
+      const callout = page.getByTestId('complexity-suggestions-capture-unavailable')
+      await expect(callout).toContainText('Chromem')
+      await expect(callout).toContainText('shared vector store')
+      // Nothing to run on, so no Run now.
+      await expect(page.getByTestId('complexity-suggestions-run-now-button')).toHaveCount(0)
+    })
+
     test('should test an edited phrase before staging it', async ({ page }) => {
       await page.goto('/workspace/model-routers?router=default&tab=suggestions')
+      await page.getByTestId('complexity-suggestion-expand-sug-refund').click()
       await page.getByTestId('complexity-suggestion-test-sug-refund').click()
       const dialog = page.getByTestId('complexity-phrase-test-dialog')
       await expect(dialog).toBeVisible()
@@ -498,11 +731,12 @@ test.describe('Model Router: default router', () => {
 
       await page.getByTestId('complexity-phrase-test-add-button').click()
       await expect(dialog).toBeHidden()
-      await expect(page.getByTestId('complexity-suggestions-staged-input-sug-refund-0')).toHaveValue('refund status for my order')
+      await expect(page.getByTestId('complexity-suggestions-staged-phrase-sug-refund-0')).toContainText('refund status for my order')
     })
 
     test('should drop a phrase test result once the phrases or tier it was run on change', async ({ page }) => {
       await page.goto('/workspace/model-routers?router=default&tab=suggestions')
+      await page.getByTestId('complexity-suggestion-expand-sug-refund').click()
       await page.getByTestId('complexity-suggestion-test-sug-refund').click()
       const result = page.getByTestId('complexity-phrase-test-result')
       const runButton = page.getByTestId('complexity-phrase-test-run-button')

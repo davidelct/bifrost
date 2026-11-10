@@ -116,6 +116,13 @@ func (l *kindLLM) CompleteJSON(_ context.Context, messages []suggest.Message) (s
 	return "", errors.New("unexpected prompt")
 }
 
+// fixedTier decides every cluster's tier the same way.
+type fixedTier string
+
+func (f fixedTier) DecideTier(context.Context, suggest.TierInput) (suggest.TierVerdict, error) {
+	return suggest.TierVerdict{Tier: string(f), Confidence: "high"}, nil
+}
+
 func newStore(t *testing.T) logstore.LogStore {
 	t.Helper()
 	ctx := context.Background()
@@ -130,7 +137,8 @@ func newStore(t *testing.T) logstore.LogStore {
 
 func settings(id string, now time.Time) Settings {
 	return Settings{RunID: id, RouterID: "engineering", TriggeredBy: logstore.ComplexitySuggestionTriggerSchedule, Now: now, Lookback: 7 * 24 * time.Hour,
-		MaxClustered: 1000, MinClusterRequests: 6, Model: "openai/gpt-5", Seed: 1, Cost: func() float64 { return 0.02 }}
+		MaxClustered: 1000, MinClusterRequests: 6, Model: "openai/gpt-5", Seed: 1, Cost: func() float64 { return 0.02 },
+		Tier: fixedTier("SIMPLE"), TierPrompt: "llm"}
 }
 
 func byTier(rows []logstore.ComplexitySuggestion) map[string]logstore.ComplexitySuggestion {
@@ -160,7 +168,7 @@ func TestRunCreatesRefreshesAndSupersedes(t *testing.T) {
 	assert.EqualValues(t, 23, result.Run.RequestsRead)
 	assert.EqualValues(t, 2, result.Run.Created)
 	assert.InDelta(t, 0.02, result.Run.Cost, 1e-9)
-	assert.Equal(t, PromptHash("", ""), result.Run.PromptHash)
+	assert.Equal(t, PromptHash("", "llm"), result.Run.PromptHash)
 	rows, err := store.ListComplexitySuggestions(ctx, logstore.ComplexitySuggestionFilter{})
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
@@ -296,12 +304,21 @@ func TestRunFailures(t *testing.T) {
 	assert.Equal(t, logstore.ComplexitySuggestionRunFailed, runs[0].Status)
 	assert.Contains(t, runs[0].Error, "no suggestion model")
 	require.NotNil(t, runs[0].FinishedAt)
+
+	noTier := settings("no-tier", now)
+	noTier.Tier = nil
+	_, err = Run(ctx, space, store, texts, &kindLLM{}, noTier)
+	require.ErrorContains(t, err, "no tier model")
+	runs, err = store.ListComplexitySuggestionRuns(ctx, logstore.ComplexitySuggestionRunFilter{IDs: []string{"no-tier"}}, 1)
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	assert.Equal(t, logstore.ComplexitySuggestionRunFailed, runs[0].Status)
 }
 
 func TestPromptHashFollowsThePrompt(t *testing.T) {
-	assert.Equal(t, PromptHash("", ""), PromptHash(suggest.DefaultInstructions(), complexity.DefaultLLMClassifierGuidance()), "empty means the shipped prompt")
-	assert.NotEqual(t, PromptHash("", ""), PromptHash("be brief", ""))
-	assert.NotEqual(t, PromptHash("", ""), PromptHash("", "SIMPLE means short"))
+	assert.Equal(t, PromptHash("", "llm"), PromptHash(suggest.DefaultInstructions(), "llm"), "empty means the shipped phrase prompt")
+	assert.NotEqual(t, PromptHash("", "llm"), PromptHash("be brief", "llm"))
+	assert.NotEqual(t, PromptHash("", "llm"), PromptHash("", "decision"), "the tier step is part of the prompt")
 }
 
 // A run reads and writes one router's suggestions: another router's, for the
@@ -396,13 +413,13 @@ func TestRunReadsTheTrafficItIsGiven(t *testing.T) {
 func TestEstimateRunBoundsClusteringAndModelCalls(t *testing.T) {
 	s := Settings{MaxClustered: 1000, MinClusterRequests: 6}
 	small := EstimateRun(600, s)
-	assert.Equal(t, Estimate{Requests: 600, Clustered: 600, MaxModelCalls: 200}, small, "600 requests make at most 100 clusters of 6")
+	assert.Equal(t, Estimate{Requests: 600, Clustered: 600, MaxModelCalls: 300}, small, "600 requests make at most 100 clusters of 6, three calls each")
 
 	big := EstimateRun(15000, s)
 	assert.Equal(t, 1000, big.Clustered)
 	assert.Equal(t, 10000, big.Assigned, "assignment stops at ten times the clustered sample")
 	assert.Equal(t, 4000, big.Skipped)
-	assert.Equal(t, 2*DefaultMaxSuggestedClusters, big.MaxModelCalls, "never more clusters sent than the per-run bound")
+	assert.Equal(t, 3*DefaultMaxSuggestedClusters, big.MaxModelCalls, "never more clusters sent than the per-run bound")
 	assert.Zero(t, EstimateRun(0, s).MaxModelCalls)
 
 	// An unset minimum is the clusterer's own default, which is what Run uses.

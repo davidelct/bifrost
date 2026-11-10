@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"strings"
 	"sync"
@@ -337,6 +338,12 @@ func (p *RoutingPlugin) scheduleRouterSuggestions(ctx context.Context, router su
 	if deps == nil || !router.config.SuggestionsEnabled() {
 		return nil
 	}
+	// Nothing is captured without a capture store, and that does not pass
+	// the way warming does, so the run is neither claimed nor recorded as
+	// skipped every interval; the status says why instead.
+	if router.classifier != nil && !router.classifier.Status().CaptureAvailable {
+		return nil
+	}
 	schedule := router.config.Suggestions.EffectiveSchedule()
 	hash := complexitySuggestionScheduleHash(schedule)
 	due, version, isDue, err := cs.dueRun(ctx, router.id, schedule, hash, now)
@@ -479,6 +486,9 @@ func (p *RoutingPlugin) StartComplexitySuggestionRunNow(ctx context.Context, rou
 	// previous phrase bank still serving while a new one warms is enough.
 	if router.classifier == nil || !router.classifier.Serving() {
 		return "", complexity.ErrNoServingGeneration
+	}
+	if !router.classifier.Status().CaptureAvailable {
+		return "", complexity.ErrNoCaptureStore
 	}
 	// Manual runs are not deduplicated, so a bare UUID: the router and the
 	// trigger are on the run row and the kind on the job.
@@ -761,10 +771,78 @@ func runSettings(router suggestionRouter, runID, triggeredBy string, window time
 		Instructions:       settings.Instructions,
 		Seed:               time.Now().UnixNano(),
 	}
-	if router.config.LLM != nil {
-		s.Guidance = router.config.LLM.Prompt
-	}
 	return s
+}
+
+// suggestionTier returns a router's tier settings, normalized; a block saved
+// before tiers were configurable decides them with the phrase model.
+func suggestionTier(settings *complexity.SuggestionsConfig) configstore.ComplexitySuggestionsTierConfig {
+	tier := configstore.ComplexitySuggestionsTierConfig{Classifier: configstore.ComplexitySuggestionsTierLLM}
+	if settings.Tier != nil {
+		tier = *settings.Tier
+	}
+	if tier.Classifier == "" {
+		tier.Classifier = configstore.ComplexitySuggestionsTierLLM
+	}
+	if tier.Model == "" && tier.Classifier == configstore.ComplexitySuggestionsTierLLM {
+		tier.Provider, tier.Model = settings.Provider, settings.Model
+	}
+	return tier
+}
+
+// SuggestionTierDefaults is what a router's tier step sends when nothing is
+// edited, rendered from the router as configured: the llm prompt body, and
+// the decision model's per-tier criteria. Both carry, as examples, the phrases
+// the router's administrator configured. Configuration surfaces show these in
+// the editors, and an unedited run sends exactly them.
+func SuggestionTierDefaults(cfg *complexity.AnalyzerConfig) (string, map[string]configstore.ComplexityDecisionTierDefaults) {
+	if cfg == nil {
+		cfg = &complexity.AnalyzerConfig{}
+	}
+	examples := suggest.BankTierExamples(cfg.Keywords)
+	guidance := ""
+	if cfg.LLM != nil {
+		guidance = cfg.LLM.Prompt
+	}
+	criteria := cfg.Decision.ResolvedCriteria()
+	for tier, c := range criteria {
+		c.Examples = append([]string{}, examples[tier]...)
+		criteria[tier] = c
+	}
+	return suggest.TierPrompt(guidance, examples), criteria
+}
+
+// suggestionTierCriteria is what a decision tier step sends: each tier's
+// edited criteria as written, the rest generated.
+func suggestionTierCriteria(cfg *complexity.AnalyzerConfig, edited map[string]configstore.ComplexityDecisionTierCriteria) map[string]configstore.ComplexityDecisionTierDefaults {
+	_, criteria := SuggestionTierDefaults(cfg)
+	for tier, c := range edited {
+		criteria[tier] = configstore.ComplexityDecisionTierDefaults{Definition: c.Definition, Signals: c.Signals, Examples: c.Examples}
+	}
+	return criteria
+}
+
+// newSuggestionTierDecider builds the tier step a router's settings name, and
+// what identifies the text it sends, for the run's prompt hash.
+func (p *RoutingPlugin) newSuggestionTierDecider(router suggestionRouter) (suggest.TierDecider, string, func() float64) {
+	tier := suggestionTier(router.config.Suggestions)
+	if tier.Model == "" {
+		return nil, "", nil
+	}
+	if tier.Classifier == configstore.ComplexitySuggestionsTierDecision {
+		criteria := suggestionTierCriteria(router.config, tier.Criteria)
+		encoded, _ := sonic.MarshalString(criteria)
+		key := strings.Join([]string{tier.Classifier, string(tier.Provider), tier.Model, suggest.TierInstructions(tier.Instructions), encoded}, "\x00")
+		decider := &decisionTierDecider{p: p, provider: tier.Provider, model: tier.Model, instructions: tier.Instructions, criteria: criteria}
+		return decider, key, decider.totalCost
+	}
+	prompt := tier.Prompt
+	if prompt == "" {
+		prompt, _ = SuggestionTierDefaults(router.config)
+	}
+	key := strings.Join([]string{tier.Classifier, string(tier.Provider), tier.Model, prompt}, "\x00")
+	adapter := &suggestionLLM{p: p, provider: tier.Provider, model: tier.Model}
+	return &suggest.LLMTierDecider{LLM: adapter, Prompt: prompt}, key, adapter.totalCost
 }
 
 // runComplexitySuggestions runs one router's suggestion run against its
@@ -782,15 +860,12 @@ func (p *RoutingPlugin) runComplexitySuggestions(ctx context.Context, meta compl
 	defer cancel()
 	s := runSettings(router, meta.RunID, meta.TriggeredBy, time.Duration(meta.WindowSeconds)*time.Second)
 	settings := router.config.Suggestions
-	provider, model := settings.Provider, settings.Model
-	if model == "" && router.config.LLM != nil {
-		provider, model = router.config.LLM.Provider, router.config.LLM.Model
-	}
 	var llm suggest.LLM
-	if model != "" {
-		s.Model = string(provider) + "/" + model
-		adapter := &suggestionLLM{p: p, provider: provider, model: model}
-		llm, s.Cost = adapter, adapter.totalCost
+	var phraseCost func() float64
+	if settings.Model != "" {
+		s.Model = string(settings.Provider) + "/" + settings.Model
+		adapter := &suggestionLLM{p: p, provider: settings.Provider, model: settings.Model}
+		llm, phraseCost = adapter, adapter.totalCost
 	}
 
 	space, err := router.classifier.SuggestionSpace(ctx)
@@ -808,6 +883,17 @@ func (p *RoutingPlugin) runComplexitySuggestions(ctx context.Context, meta compl
 		return suggestrun.Result{Run: *run}, err
 	}
 	defer space.Close()
+	tier, tierPrompt, tierCost := p.newSuggestionTierDecider(router)
+	s.Tier, s.TierPrompt = tier, tierPrompt
+	s.Cost = func() float64 {
+		var total float64
+		for _, cost := range []func() float64{phraseCost, tierCost} {
+			if cost != nil {
+				total += cost()
+			}
+		}
+		return total
+	}
 	texts := func(ctx context.Context, ids []string) (map[string]string, error) {
 		return deps.texts(ctx, ids, space.MessageHistoryCount)
 	}
@@ -880,4 +966,85 @@ func (l *suggestionLLM) CompleteJSON(ctx context.Context, messages []suggest.Mes
 		return "", errors.New("suggestion model response contained no text")
 	}
 	return text, nil
+}
+
+// decisionTierDecider picks a suggestion's tier with a decision model: one
+// choice question with the tier step's instructions, whose choices are the
+// tier step's per-tier criteria.
+type decisionTierDecider struct {
+	p            *RoutingPlugin
+	provider     schemas.ModelProvider
+	model        string
+	instructions string
+	criteria     map[string]configstore.ComplexityDecisionTierDefaults
+
+	mu   sync.Mutex
+	cost float64
+}
+
+func (d *decisionTierDecider) totalCost() float64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.cost
+}
+
+// DecideTier implements suggest.TierDecider. An answer without a valid tier
+// is no usable tier, not a failed run.
+func (d *decisionTierDecider) DecideTier(ctx context.Context, in suggest.TierInput) (suggest.TierVerdict, error) {
+	executor := d.p.decisionExecutor()
+	if executor == nil {
+		return suggest.TierVerdict{}, errors.New("decision-model executor is not configured")
+	}
+	decisionCtx := schemas.NewBifrostContext(ctx, time.Now().Add(suggestionLLMTimeout))
+	defer decisionCtx.Cancel()
+	bifrost.PrepareContextForInternalRequest(decisionCtx)
+	text := suggest.TierRequestText(in)
+	response, bifrostErr := executor(decisionCtx, &schemas.BifrostDecisionRequest{
+		Provider: d.provider,
+		Model:    d.model,
+		Input:    schemas.DecisionInput{Messages: []schemas.DecisionInputMessage{{Role: "user", Content: schemas.DecisionInputContent{Text: &text}}}},
+		Questions: []schemas.DecisionQuestion{{
+			Type:         schemas.DecisionTypeChoice,
+			Name:         schemas.Ptr(decisionComplexityQuestion),
+			Instructions: schemas.NewDecisionText(suggest.TierInstructions(d.instructions)),
+			Choices:      decisionTierChoices(d.criteria, d.model),
+		}},
+	})
+	if bifrostErr != nil {
+		return suggest.TierVerdict{}, fmt.Errorf("tier decision model call failed: %v", bifrostErr.GetErrorString())
+	}
+	if response == nil {
+		return suggest.TierVerdict{}, errors.New("tier decision model returned no response")
+	}
+	cost := decisionCtx.CalculateCost(&schemas.BifrostResponse{DecisionResponse: response})
+	d.mu.Lock()
+	d.cost += cost
+	d.mu.Unlock()
+	answer, ok := decisionAnswerNamed(response.Answers, decisionComplexityQuestion)
+	if !ok || answer.Type != schemas.DecisionTypeChoice || answer.Choice == nil {
+		return suggest.TierVerdict{}, nil
+	}
+	tier, ok := complexityTierFromDecisionChoice(*answer.Choice)
+	if !ok {
+		return suggest.TierVerdict{}, nil
+	}
+	verdict := suggest.TierVerdict{Tier: tier}
+	if answer.Confidence != nil {
+		verdict.Confidence = decisionConfidenceLabel(*answer.Confidence)
+	}
+	return verdict, nil
+}
+
+// decisionConfidenceLabel maps a decision model's 0-1 confidence onto the
+// high/medium/low labels suggestions carry.
+func decisionConfidenceLabel(confidence float64) string {
+	switch {
+	case math.IsNaN(confidence) || confidence < 0 || confidence > 1:
+		return ""
+	case confidence >= 0.75:
+		return "high"
+	case confidence >= 0.4:
+		return "medium"
+	}
+	return "low"
 }

@@ -107,7 +107,41 @@ export interface SuggestionsConfig {
 	provider?: string;
 	model?: string;
 	instructions?: string;
+	tier?: SuggestionsTierConfig;
 }
+
+// The classifiers a suggestion run can decide tiers with. Phrases are always
+// written by an LLM.
+export const SUGGESTION_TIER_CLASSIFIERS = ["llm", "decision"] as const;
+export type SuggestionTierClassifier = (typeof SUGGESTION_TIER_CLASSIFIERS)[number];
+
+// The tier step's text. Left out, a run generates it from the router (its
+// tier definitions, its own phrases as examples); once set, it is sent as
+// written. prompt is the llm's whole prompt; instructions and criteria are the
+// decision model's question and per-tier choices.
+export interface SuggestionsTierConfig {
+	classifier: SuggestionTierClassifier;
+	provider?: string;
+	model?: string;
+	prompt?: string;
+	instructions?: string;
+	criteria?: Partial<Record<DecisionTier, SuggestionTierCriteria>>;
+}
+
+export interface SuggestionTierCriteria {
+	definition: string;
+	signals?: string[];
+	examples?: string[];
+}
+
+// What a router's tier step sends while nothing is edited, rendered by the
+// gateway from the saved router.
+export interface SuggestionTierDefaults {
+	prompt: string;
+	criteria: Record<DecisionTier, { definition: string; signals: string[]; examples: string[] }>;
+}
+
+export const MAX_SUGGESTION_TIER_PROMPT_CHARACTERS = 16000;
 
 // The llm classifier has no warmup: it holds no corpus and makes its first
 // provider call on the first classified request, so it is simply ready the
@@ -118,6 +152,10 @@ export interface LLMStatusInfo {
 
 export interface SemanticStatusInfo {
 	state: "disabled" | "warming" | "ready" | "failed";
+	// Whether classified requests can be captured for suggestions: they need a
+	// shared vector store, not Chromem (each gateway's own memory) or none.
+	capture_available?: boolean;
+	capture_unavailable_reason?: "no_vector_store" | "embedded_vector_store";
 	loaded: number;
 	total: number;
 	serving_previous?: boolean;
@@ -155,6 +193,9 @@ export interface SemanticStatusInfo {
 	decision_defaults?: DecisionGuidanceDefaults;
 	// The shipped phrase-suggestion instructions, for the instructions editor.
 	suggestion_default_instructions?: string;
+	suggestion_default_tier_instructions?: string;
+	suggestion_default_tier_prompt?: string;
+	suggestion_default_tier_criteria?: SuggestionTierDefaults["criteria"];
 }
 
 export interface AnalyzerConfig {

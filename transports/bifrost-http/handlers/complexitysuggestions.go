@@ -451,7 +451,7 @@ func (h *RoutingHandler) startComplexitySuggestionRun(ctx *fasthttp.RequestCtx) 
 	case errors.Is(err, routing.ErrComplexitySuggestionsOff), errors.Is(err, routing.ErrComplexitySuggestionRunInFlight):
 		SendError(ctx, fasthttp.StatusConflict, err.Error())
 		return
-	case errors.Is(err, complexity.ErrNoServingGeneration):
+	case errors.Is(err, complexity.ErrNoServingGeneration), errors.Is(err, complexity.ErrNoCaptureStore):
 		SendError(ctx, fasthttp.StatusServiceUnavailable, err.Error())
 		return
 	case err != nil:
@@ -488,7 +488,7 @@ func (h *RoutingHandler) estimateComplexitySuggestionRun(ctx *fasthttp.RequestCt
 		SendError(ctx, fasthttp.StatusNotFound, err.Error())
 	case errors.Is(err, routing.ErrComplexitySuggestionsOff):
 		SendError(ctx, fasthttp.StatusConflict, err.Error())
-	case errors.Is(err, complexity.ErrNoServingGeneration):
+	case errors.Is(err, complexity.ErrNoServingGeneration), errors.Is(err, complexity.ErrNoCaptureStore):
 		SendError(ctx, fasthttp.StatusServiceUnavailable, err.Error())
 	case err != nil:
 		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("failed to estimate suggestion run: %v", err))

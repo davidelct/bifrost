@@ -101,8 +101,10 @@ type SemanticStatusInfo struct {
 	// up or inspecting them is guesswork without it. Empty while nothing is
 	// serving.
 	Namespace string `json:"namespace,omitempty"`
-	// CaptureAvailable reports a configured vector store to keep captured request vectors in.
-	CaptureAvailable bool `json:"capture_available"`
+	// CaptureAvailable reports a vector store to keep captured request vectors
+	// in; CaptureUnavailableReason says why not when there is none.
+	CaptureAvailable         bool   `json:"capture_available"`
+	CaptureUnavailableReason string `json:"capture_unavailable_reason,omitempty"`
 }
 
 // SemanticResult is the tier selected by the nearest labelled exemplar.
@@ -301,11 +303,46 @@ func (c *SemanticClassifier) SetRequestCapture(capture *RequestCapture) {
 func (c *SemanticClassifier) captureTarget() (*RequestCapture, vectorstore.VectorStore, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.configuredStore == nil {
+	store := c.captureStoreLocked()
+	if store == nil {
 		return c.capture, nil, ""
 	}
-	return c.capture, c.configuredStore, c.lastCaptureNamespace
+	return c.capture, store, c.lastCaptureNamespace
 }
+
+// captureStoreLocked is where captured requests are kept: Bifrost's configured
+// vector store, unless that is Chromem. Chromem lives in each gateway's
+// memory, so a cluster's captures would be split across nodes and a run would
+// see one node's share, and a week of sampled vectors would sit in RAM.
+// Capture is off on it, as it is without a configured store. c.mu is held.
+func (c *SemanticClassifier) captureStoreLocked() vectorstore.VectorStore {
+	if c.configuredStore == nil || isLocalChromemStore(c.configuredStore) {
+		return nil
+	}
+	return c.configuredStore
+}
+
+// CaptureUnavailableReason says why requests are not captured: no configured
+// vector store, or one (Chromem) capture does not use. Empty when they are.
+func (c *SemanticClassifier) captureUnavailableReasonLocked() string {
+	switch {
+	case c.configuredStore == nil:
+		return CaptureUnavailableNoStore
+	case isLocalChromemStore(c.configuredStore):
+		return CaptureUnavailableEmbeddedStore
+	}
+	return ""
+}
+
+// Reasons capture is unavailable, as SemanticStatusInfo reports them.
+const (
+	CaptureUnavailableNoStore       = "no_vector_store"
+	CaptureUnavailableEmbeddedStore = "embedded_vector_store"
+)
+
+// ErrNoCaptureStore is a suggestion run or estimate on a gateway that keeps no
+// captured requests.
+var ErrNoCaptureStore = errors.New("phrase suggestions need a shared vector store (Weaviate, Qdrant, Redis or Pinecone) to keep captured requests in; Chromem is not used for them because it keeps them in each gateway's memory")
 
 // ForgetCapturedRequests deletes the captured vectors of deleted logs from
 // the latest serving embedding space's capture namespace; deletes it cannot do are
@@ -460,7 +497,8 @@ func (c *SemanticClassifier) Status() SemanticStatusInfo {
 	status := c.status
 	cache := c.embeddingCache
 	status.StorageMode = c.resolvedStorage
-	status.CaptureAvailable = c.configuredStore != nil
+	status.CaptureUnavailableReason = c.captureUnavailableReasonLocked()
+	status.CaptureAvailable = status.CaptureUnavailableReason == ""
 	// Taken from the serving generation rather than the current configuration:
 	// while a new generation warms, the namespace being queried is still the
 	// previous one, and naming the one that is not yet in use would point an
@@ -553,7 +591,7 @@ func (c *SemanticClassifier) Classify(ctx context.Context, input ComplexityInput
 	embed := generation.embed
 	exemplars := generation.exemplars
 	capture := c.capture
-	captureStore := c.configuredStore // never the embedded store; see captureTarget
+	captureStore := c.captureStoreLocked() // never the embedded store or Chromem; see captureTarget
 	captureNamespace := generation.captureNamespace
 	localGeneration := isLocalChromemStore(store)
 	if localGeneration {

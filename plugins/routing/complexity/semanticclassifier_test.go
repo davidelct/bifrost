@@ -1294,8 +1294,41 @@ func TestSemanticClassifierCapturesNothingWithoutAVectorStore(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, names)
 	assert.False(t, classifier.Status().CaptureAvailable)
+	assert.Equal(t, CaptureUnavailableNoStore, classifier.Status().CaptureUnavailableReason)
 	_, store, _ := classifier.captureTarget()
 	assert.Nil(t, store)
+	_, err = classifier.SuggestionSpace(context.Background())
+	assert.ErrorIs(t, err, ErrNoCaptureStore)
+}
+
+// TestSemanticClassifierCapturesNothingIntoChromem: Chromem keeps vectors in
+// one gateway's memory, so a cluster's captures would be split across nodes
+// and a week of them would sit in RAM. Configured as Bifrost's vector store,
+// it gets no captures, its deletes and sweeps are not attempted, suggestions
+// refuse to run on it, and the status says why.
+func TestSemanticClassifierCapturesNothingIntoChromem(t *testing.T) {
+	chromem := newTestChromemStore(t, bifrost.NewDefaultLogger(schemas.LogLevelError))
+	classifier := readySemanticClassifierWithStore(t, chromem)
+	capture := newCaptureTest(t)
+	capture.Configure(&CaptureConfig{SampleRate: 1})
+	classifier.SetRequestCapture(capture)
+	_, err := classifier.Classify(requestCtx("req-1"), ComplexityInput{LastUserText: "simple request"})
+	require.NoError(t, err)
+	assert.Zero(t, capture.Stats().Queued)
+	names, err := chromem.ListNamespaces(context.Background(), CaptureNamespacePrefix)
+	require.NoError(t, err)
+	assert.Empty(t, names)
+
+	status := classifier.Status()
+	assert.False(t, status.CaptureAvailable)
+	assert.Equal(t, CaptureUnavailableEmbeddedStore, status.CaptureUnavailableReason)
+	_, store, _ := classifier.captureTarget()
+	assert.Nil(t, store)
+	n, err := classifier.SweepCapturedRequests(context.Background(), time.Now())
+	require.NoError(t, err)
+	assert.Zero(t, n)
+	_, err = classifier.SuggestionSpace(context.Background())
+	assert.ErrorIs(t, err, ErrNoCaptureStore)
 }
 
 // TestSemanticClassifierWithoutCaptureWritesNothing pins the default: no

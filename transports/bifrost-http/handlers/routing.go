@@ -95,6 +95,15 @@ type complexityStatusResponse struct {
 	// SuggestionDefaultInstructions is the shipped phrase-suggestion
 	// instructions, served for the same reason: the editable half only.
 	SuggestionDefaultInstructions string `json:"suggestion_default_instructions"`
+	// SuggestionDefaultTierInstructions is the shipped tier-step prompt for
+	// suggestions, editable half only.
+	SuggestionDefaultTierInstructions string `json:"suggestion_default_tier_instructions"`
+	// SuggestionDefaultTierPrompt and SuggestionDefaultTierCriteria are what
+	// this router's tier step sends when nothing is edited, rendered from its
+	// config (its own phrases as examples). Only the per-router status serves
+	// them; the editors show them, and an edit replaces them.
+	SuggestionDefaultTierPrompt   string                                                `json:"suggestion_default_tier_prompt,omitempty"`
+	SuggestionDefaultTierCriteria map[string]configstore.ComplexityDecisionTierDefaults `json:"suggestion_default_tier_criteria,omitempty"`
 }
 
 // RoutingHandler manages HTTP requests for routing rules and complexity analyzer config.
@@ -485,9 +494,10 @@ func (h *RoutingHandler) getComplexitySemanticStatus(ctx *fasthttp.RequestCtx) {
 		return
 	}
 	response := complexityStatusResponse{
-		SemanticStatusInfo:            status,
-		DecisionDefaults:              configstore.DefaultComplexityDecisionGuidance(),
-		SuggestionDefaultInstructions: suggest.DefaultInstructions(),
+		SemanticStatusInfo:                status,
+		DecisionDefaults:                  configstore.DefaultComplexityDecisionGuidance(),
+		SuggestionDefaultInstructions:     suggest.DefaultInstructions(),
+		SuggestionDefaultTierInstructions: suggest.DefaultTierInstructions(),
 	}
 	// The llm classifier state rides the same endpoint and must not be able to
 	// fail the whole response.

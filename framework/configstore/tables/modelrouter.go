@@ -72,6 +72,12 @@ type TableModelRouter struct {
 	SuggestionsInstructions         *string    `gorm:"type:text" json:"-"`
 	SuggestionsScheduleEvery        *string    `gorm:"type:varchar(16)" json:"-"` // anchor: NULL means no schedule
 	SuggestionsScheduleStartAt      *time.Time `json:"-"`                         // NULL takes the default first run
+	SuggestionsTierClassifier       *string    `gorm:"type:varchar(16)" json:"-"` // anchor: NULL means no tier block
+	SuggestionsTierProvider         *string    `gorm:"type:varchar(255)" json:"-"`
+	SuggestionsTierModel            *string    `gorm:"type:varchar(255)" json:"-"`
+	SuggestionsTierInstructions     *string    `gorm:"type:text" json:"-"`
+	SuggestionsTierPrompt           *string    `gorm:"type:text" json:"-"`
+	SuggestionsTierCriteriaJSON     *string    `gorm:"column:suggestions_tier_criteria_json;type:text" json:"-"` // JSON map[tier]criteria
 
 	// ConfigHashesJSON holds the per-section hashes of the config.json entry
 	// last applied, so a reboot re-applies only the sections the file changed.

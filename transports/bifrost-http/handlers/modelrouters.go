@@ -19,6 +19,7 @@ import (
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/configstore"
 	configstoreTables "github.com/maximhq/bifrost/framework/configstore/tables"
+	"github.com/maximhq/bifrost/plugins/routing"
 	"github.com/maximhq/bifrost/plugins/routing/complexity"
 	"github.com/maximhq/bifrost/plugins/routing/complexity/suggest"
 	"github.com/maximhq/bifrost/plugins/routing/rules"
@@ -341,12 +342,23 @@ func (h *RoutingHandler) getModelRouterStatus(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusServiceUnavailable, fmt.Sprintf("failed to get model router status: %v", err))
 		return
 	}
+	// The tier step's generated text comes from the saved router, so the
+	// editor shows exactly what an unedited run of it sends.
+	var config *configstore.ComplexityAnalyzerConfig
+	if router, loadErr := h.loadModelRouter(ctx, id); loadErr == nil {
+		normalized := router.ComplexityAnalyzerConfig.Normalized()
+		config = &normalized
+	}
+	tierPrompt, tierCriteria := routing.SuggestionTierDefaults(config)
 	SendJSON(ctx, complexityStatusResponse{
-		SemanticStatusInfo:            semantic,
-		LLM:                           &llm,
-		DecisionDefaults:              configstore.DefaultComplexityDecisionGuidance(),
-		SuggestionDefaultInstructions: suggest.DefaultInstructions(),
-		LLMDefaultPrompt:              complexity.DefaultLLMClassifierGuidance(),
+		SemanticStatusInfo:                semantic,
+		LLM:                               &llm,
+		DecisionDefaults:                  configstore.DefaultComplexityDecisionGuidance(),
+		SuggestionDefaultInstructions:     suggest.DefaultInstructions(),
+		SuggestionDefaultTierInstructions: suggest.DefaultTierInstructions(),
+		SuggestionDefaultTierPrompt:       tierPrompt,
+		SuggestionDefaultTierCriteria:     tierCriteria,
+		LLMDefaultPrompt:                  complexity.DefaultLLMClassifierGuidance(),
 	})
 }
 

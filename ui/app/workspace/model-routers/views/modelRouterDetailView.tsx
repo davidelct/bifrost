@@ -27,7 +27,14 @@ import {
 	useUpdateComplexitySuggestionStatusMutation,
 	useUpdateModelRouterMutation,
 } from "@/lib/store/apis/governanceApi";
-import { DecisionTier, DEFAULT_COMPLEXITY_ROUTER_ID, MAX_SEMANTIC_PHRASES, Suggestion } from "@/lib/types/complexityRouter";
+import {
+	COMPLEXITY_TIER_VALUES,
+	DecisionTier,
+	DEFAULT_COMPLEXITY_ROUTER_ID,
+	MAX_SEMANTIC_PHRASES,
+	Suggestion,
+	SuggestionTierDefaults,
+} from "@/lib/types/complexityRouter";
 import { ModelProvider } from "@/lib/types/config";
 import { DBKey } from "@/lib/types/governance";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
@@ -46,6 +53,8 @@ import {
 	getDecisionProviderState,
 	isDecisionGuidanceDefault,
 	isDecisionGuidanceEmpty,
+	isDecisionTierEmpty,
+	tierCriteriaFormValues,
 	decisionCriteriaFromDefaults,
 	isRouterConfigured,
 	decisionGuidanceFormValues,
@@ -211,6 +220,12 @@ export default function ModelRouterDetailView({ routerId, onBack, onOpenRules, i
 	const liveSession = watch("session");
 	const liveKeywords = watch("keywords");
 	const liveSuggestions = watch("suggestions");
+	const liveDecisionModel = watch("decision.model");
+	// Where an empty suggestion model starts from: copied in by the settings
+	// sheet, never followed afterwards.
+	const liveLLMModel = liveLLM?.provider && liveLLM?.model ? { provider: liveLLM.provider, model: liveLLM.model } : undefined;
+	const liveDecisionChoice =
+		liveDecisionProvider && liveDecisionModel ? { provider: liveDecisionProvider, model: liveDecisionModel } : undefined;
 
 	// Narrows the model list to what this provider's enabled keys can actually
 	// serve. /api/models only applies per-key allow-lists and blacklists when it
@@ -310,8 +325,10 @@ export default function ModelRouterDetailView({ routerId, onBack, onOpenRules, i
 	// stageSuggestion adds a suggestion's phrases to its tier's draft list and
 	// reports how many were new; phrases the bank already holds are skipped.
 	const stageSuggestion = (suggestion: Suggestion, tier: DecisionTier, phrases: string[]): number => {
+		// Read from the form, not the render: a drop of several rows stages them
+		// one after another before the page renders again.
 		const keywords = getValues("keywords");
-		const room = Math.max(0, MAX_SEMANTIC_PHRASES - totalPhrases);
+		const room = Math.max(0, MAX_SEMANTIC_PHRASES - countCanonicalSemanticPhrases(keywords).total);
 		const adding = newPhrases(keywords, phrases).slice(0, room);
 		if (adding.length === 0) return 0;
 		setValue("keywords", addPhrases(keywords, tier, adding), { shouldDirty: true, shouldValidate: isSubmitted });
@@ -355,6 +372,15 @@ export default function ModelRouterDetailView({ routerId, onBack, onOpenRules, i
 	// valid and means "use default guidance" when saved.
 	const defaultLLMPrompt = semanticStatus?.llm_default_prompt ?? "";
 	const decisionDefaults = semanticStatus?.decision_defaults;
+	// What the suggestions tier step sends while nothing is edited, rendered
+	// by the gateway from the saved router.
+	const tierDefaultPrompt = semanticStatus?.suggestion_default_tier_prompt;
+	const tierDefaultCriteria = semanticStatus?.suggestion_default_tier_criteria;
+	const tierDefaults = useMemo<SuggestionTierDefaults | undefined>(
+		() =>
+			tierDefaultPrompt !== undefined && tierDefaultCriteria ? { prompt: tierDefaultPrompt, criteria: tierDefaultCriteria } : undefined,
+		[tierDefaultPrompt, tierDefaultCriteria],
+	);
 	const liveDecisionCriteria = useWatch({ control, name: "decision.criteria" });
 	// The decision model's Restore defaults only refills the form: it saves like any other edit
 	// and Discard undoes it, so unlike the semantic restore it needs no dialog.
@@ -431,9 +457,9 @@ export default function ModelRouterDetailView({ routerId, onBack, onOpenRules, i
 
 	useEffect(() => {
 		if (!data || isDirty || promptEdited.current) return;
-		reset(toFormValues(data, decisionDefaults));
+		reset(toFormValues(data, decisionDefaults, tierDefaults));
 		setSubmitError(null);
-	}, [data, isDirty, reset, decisionDefaults]);
+	}, [data, isDirty, reset, decisionDefaults, tierDefaults]);
 
 	// Status usually lands after the config, so guidance the form hydrated
 	// without defaults is filled in once they arrive. Only still-empty guidance
@@ -443,6 +469,20 @@ export default function ModelRouterDetailView({ routerId, onBack, onOpenRules, i
 		const seeded = decisionGuidanceFormValues(data.decision, decisionDefaults);
 		setValue("decision.criteria", seeded.criteria, { shouldDirty: false });
 	}, [data, decisionDefaults, getValues, setValue]);
+
+	// The tier step's criteria editors are seeded the same way once the
+	// generated criteria arrive: every tier still empty gets its saved edit or
+	// the generated criteria, and a filled tier is never overwritten.
+	useEffect(() => {
+		if (!data || !tierDefaults) return;
+		const current = getValues("suggestions.tier_criteria");
+		const seeded = tierCriteriaFormValues(data.suggestions?.tier, tierDefaults.criteria);
+		for (const tier of COMPLEXITY_TIER_VALUES) {
+			if (isDecisionTierEmpty(current[tier])) {
+				setValue(`suggestions.tier_criteria.${tier}`, seeded[tier], { shouldDirty: false });
+			}
+		}
+	}, [data, tierDefaults, getValues, setValue]);
 
 	// Run after saved-data hydration and read the current form value, not the
 	// previous render's value, when config and status arrive together.
@@ -454,7 +494,7 @@ export default function ModelRouterDetailView({ routerId, onBack, onOpenRules, i
 	const handleDiscard = () => {
 		promptEdited.current = false;
 		setStaged([]);
-		if (data) reset(toFormValues(data, decisionDefaults));
+		if (data) reset(toFormValues(data, decisionDefaults, tierDefaults));
 		setSubmitError(null);
 	};
 
@@ -466,7 +506,7 @@ export default function ModelRouterDetailView({ routerId, onBack, onOpenRules, i
 			.then((defaults) => {
 				promptEdited.current = false;
 				setStaged([]);
-				reset(toFormValues(defaults, decisionDefaults));
+				reset(toFormValues(defaults, decisionDefaults, tierDefaults));
 				toast.success(t("routing.resetToDefaults"), { position: "top-right" });
 			})
 			.catch((err) => {
@@ -518,7 +558,7 @@ export default function ModelRouterDetailView({ routerId, onBack, onOpenRules, i
 		// The helper preserves saved sheet-only settings and omits session when
 		// disabled. Nil is already the wire-level disabled state; avoiding the
 		// additive field keeps unrelated edits compatible with older gateways.
-		const payload = toAnalyzerPayload(values, data);
+		const payload = toAnalyzerPayload(values, data, tierDefaults);
 		// Taken before the save: staging is cleared with the form afterwards.
 		const accepting = activeStaged;
 		// The router's identity rides along unchanged; it is edited on its own.
@@ -526,7 +566,7 @@ export default function ModelRouterDetailView({ routerId, onBack, onOpenRules, i
 			.unwrap()
 			.then((res) => {
 				promptEdited.current = false;
-				reset(toFormValues(res, decisionDefaults));
+				reset(toFormValues(res, decisionDefaults, tierDefaults));
 				setEmbeddingSheetOpen(false);
 				setDecisionSheetOpen(false);
 				setSuggestionSheetOpen(false);
@@ -888,11 +928,18 @@ export default function ModelRouterDetailView({ routerId, onBack, onOpenRules, i
 										enabled={Boolean(data.suggestions?.enabled)}
 										lookbackDays={data.suggestions?.lookback_days ?? liveSuggestions.lookback_days}
 										staged={activeStaged}
+										tierCounts={{
+											SIMPLE: liveKeywords?.simple_keywords.length ?? 0,
+											MEDIUM: liveKeywords?.medium_keywords.length ?? 0,
+											COMPLEX: liveKeywords?.complex_keywords.length ?? 0,
+										}}
+										minSimilarity={data.semantic?.min_similarity}
 										remainingPhrases={Math.max(0, MAX_SEMANTIC_PHRASES - totalPhrases)}
 										onStage={stageSuggestion}
 										onUnstage={unstageSuggestion}
 										onEditStaged={editStagedPhrase}
 										onOpenSettings={() => setSuggestionSheetOpen(true)}
+										captureUnavailableReason={semanticStatus?.capture_unavailable_reason}
 									/>
 								)}
 
@@ -1094,9 +1141,13 @@ export default function ModelRouterDetailView({ routerId, onBack, onOpenRules, i
 				errors={errors.suggestions}
 				canUpdate={canUpdate}
 				chatProviders={chatProviders}
+				providers={providersData ?? []}
 				keys={allKeys ?? []}
-				fallbackModel={data.llm?.provider && data.llm?.model ? `${data.llm.provider}/${data.llm.model}` : undefined}
+				llmModel={liveLLMModel}
+				decisionModel={liveDecisionChoice}
 				defaultInstructions={semanticStatus?.suggestion_default_instructions ?? ""}
+				defaultTierInstructions={semanticStatus?.suggestion_default_tier_instructions ?? ""}
+				tierDefaults={tierDefaults}
 				canSave={canSave}
 				isSaving={isSaving}
 				onSave={() => void submit()}

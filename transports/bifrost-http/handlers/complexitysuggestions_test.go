@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -23,12 +24,13 @@ import (
 // log store.
 type suggestionManagerFake struct {
 	mockRoutingManager
-	store    logstore.LogStore
-	texts    map[string]string
-	runErr   error
-	tested   []suggestrun.TestExample
-	testErr  error
-	runCalls int
+	store       logstore.LogStore
+	texts       map[string]string
+	runErr      error
+	estimateErr error
+	tested      []suggestrun.TestExample
+	testErr     error
+	runCalls    int
 	// windows records the window of each run started; version is what the
 	// default router serves.
 	windows []time.Duration
@@ -40,6 +42,9 @@ func (m *suggestionManagerFake) ComplexitySuggestionRouter(routerID string) (str
 }
 
 func (m *suggestionManagerFake) EstimateComplexitySuggestionRun(_ context.Context, _ string, window time.Duration) (suggestrun.Estimate, error) {
+	if m.estimateErr != nil {
+		return suggestrun.Estimate{}, m.estimateErr
+	}
 	if window > 7*24*time.Hour {
 		return suggestrun.Estimate{}, routing.ErrComplexitySuggestionWindow
 	}
@@ -238,7 +243,11 @@ func TestComplexitySuggestionsRuns(t *testing.T) {
 	manager.runErr = complexity.ErrNoServingGeneration
 	code, _ = serve(t, r, fasthttp.MethodPost, "/api/routing/complexity-suggestions/runs", "")
 	assert.Equal(t, fasthttp.StatusServiceUnavailable, code, "no warmed phrase bank to suggest against")
-	assert.Equal(t, 3, manager.runCalls)
+	manager.runErr = complexity.ErrNoCaptureStore
+	code, body = serve(t, r, fasthttp.MethodPost, "/api/routing/complexity-suggestions/runs", "")
+	assert.Equal(t, fasthttp.StatusServiceUnavailable, code, "nothing captured to suggest from")
+	assert.Contains(t, fmt.Sprint(body), "shared vector store", "the refusal says what is needed")
+	assert.Equal(t, 4, manager.runCalls)
 }
 
 func TestComplexitySuggestionsNeedALogStore(t *testing.T) {
@@ -307,4 +316,8 @@ func TestComplexitySuggestionsRunWindowAndEstimate(t *testing.T) {
 	assert.Equal(t, 300.0, body["max_model_calls"])
 	code, _ = serve(t, r, fasthttp.MethodGet, "/api/routing/complexity-suggestions/runs/estimate?window=30d", "")
 	assert.Equal(t, fasthttp.StatusBadRequest, code, "a window past the lookback")
+	manager.estimateErr = complexity.ErrNoCaptureStore
+	code, body = serve(t, r, fasthttp.MethodGet, "/api/routing/complexity-suggestions/runs/estimate?window=7d", "")
+	assert.Equal(t, fasthttp.StatusServiceUnavailable, code, "Chromem or no store: a 503 with the reason, not a 500")
+	assert.Contains(t, fmt.Sprint(body), "shared vector store")
 }

@@ -2614,6 +2614,45 @@ func TestSchemaComplexityAnalyzerDependencies(t *testing.T) {
 				`"max_clustered_requests":5000,"min_cluster_requests":10,"provider":"openai","model":"gpt-5","instructions":"be brief"}`),
 		},
 		{
+			name: "suggestions accept a decision tier step",
+			analyzer: complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"provider":"openai","model":"gpt-5",` +
+				`"tier":{"classifier":"decision","provider":"typesafe","model":"jev-latest","instructions":"judge the work"}}`),
+		},
+		{
+			name:     "suggestions accept an llm tier step without a model",
+			analyzer: complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"tier":{"classifier":"llm"}}`),
+		},
+		{
+			name: "suggestions accept an edited tier prompt and per-tier criteria",
+			analyzer: complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"tier":{"classifier":"decision","prompt":"Refunds are SIMPLE.",` +
+				`"instructions":"Which tier?","criteria":{"SIMPLE":{"definition":"One short answer.","signals":[],"examples":["where is my refund"]}}}}`),
+		},
+		{
+			name:      "suggestions reject tier criteria for an unknown tier",
+			analyzer:  complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"tier":{"classifier":"decision","criteria":{"HARD":{"definition":"x"}}}}`),
+			wantError: true,
+		},
+		{
+			name:      "suggestions reject tier criteria without a definition",
+			analyzer:  complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"tier":{"classifier":"decision","criteria":{"SIMPLE":{"examples":["hi"]}}}}`),
+			wantError: true,
+		},
+		{
+			name:      "suggestions reject an unknown tier classifier",
+			analyzer:  complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"tier":{"classifier":"lexical"}}`),
+			wantError: true,
+		},
+		{
+			name:      "suggestions reject a tier provider without a model",
+			analyzer:  complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"tier":{"classifier":"llm","provider":"openai"}}`),
+			wantError: true,
+		},
+		{
+			name:      "suggestions reject unknown tier fields",
+			analyzer:  complexityAnalyzerSchemaConfig(`,"suggestions":{"enabled":true,"tier":{"mode":"llm"}}`),
+			wantError: true,
+		},
+		{
 			name:     "suggestions accept an hourly schedule",
 			analyzer: complexityAnalyzerSchemaConfig(suggestionsSchemaPrereqs, `,"suggestions":{"enabled":true,"schedule":{"every":"6h"}}`),
 		},
