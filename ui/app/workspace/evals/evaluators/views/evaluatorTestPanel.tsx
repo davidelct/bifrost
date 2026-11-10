@@ -9,6 +9,7 @@ import { LoaderCircle, Play } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { type ExecutionOutcome, executionOutcome, scoreText } from "./evaluatorUtils";
+import { LoadFromDataset } from "../../datasets/views/loadFromDataset";
 
 // How long the gateway holds the execute call before answering "still running".
 const EXECUTE_WAIT_MS = 15000;
@@ -90,6 +91,9 @@ export function EvaluatorTestPanel({ draft, variables, optionalVariables, blocke
 				<p className="text-muted-foreground text-xs">{t("evals.test.description")}</p>
 			</div>
 			<div className="relative flex min-h-0 grow flex-col gap-4 p-4 lg:overflow-y-auto">
+				{(variables.length > 0 || optionalVariables.length > 0) && (
+					<LoadFromDataset onLoad={(loaded) => setValues((prev) => ({ ...prev, ...loaded }))} />
+				)}
 				{variables.length === 0 && optionalVariables.length === 0 && (
 					<p className="text-muted-foreground text-xs" data-testid="evaluator-test-no-variables">
 						{t("evals.test.noVariables")}

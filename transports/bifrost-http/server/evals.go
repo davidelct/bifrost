@@ -8,6 +8,7 @@ import (
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/configstore"
 	"github.com/maximhq/bifrost/framework/evals"
+	"github.com/maximhq/bifrost/framework/evals/datasets"
 	"github.com/maximhq/bifrost/framework/grant"
 	"github.com/maximhq/bifrost/framework/queue"
 	"github.com/maximhq/bifrost/transports/v2/bifrost-http/handlers"
@@ -159,4 +160,18 @@ func (s *BifrostHTTPServer) shutdownEvals() {
 		logger.Warn("evals: queue did not shut down cleanly: %v", err)
 	}
 	s.evals = nil
+}
+
+// setupEvalDatasets builds the dataset API. Datasets live in the config store, so
+// there is nothing to serve without one. The log store is optional: without it rows
+// cannot be added from logs or sessions, and everything else works.
+func (s *BifrostHTTPServer) setupEvalDatasets() *handlers.EvalsDatasetsHandler {
+	if s.Config.ConfigStore == nil {
+		return nil
+	}
+	var logs datasets.LogReader
+	if s.Config.LogsStore != nil {
+		logs = s.Config.LogsStore
+	}
+	return handlers.NewEvalsDatasetsHandler(datasets.NewService(s.Config.ConfigStore, logs))
 }
