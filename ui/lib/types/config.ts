@@ -309,6 +309,7 @@ export interface DatabricksKeyConfig {
 	client_id?: SecretVar;
 	client_secret?: SecretVar;
 	forward_gateway_tags?: boolean;
+	scopes?: string[];
 	// UI-only discriminator; not sent to the API.
 	_auth_type?: "pat" | "oauth_m2m";
 }
@@ -320,6 +321,7 @@ export const DefaultDatabricksKeyConfig: DatabricksKeyConfig = {
 	client_id: { value: "", ref: "" },
 	client_secret: { value: "", ref: "" },
 	forward_gateway_tags: false,
+	scopes: [],
 	_auth_type: "pat",
 } as const satisfies Required<DatabricksKeyConfig>;
 
